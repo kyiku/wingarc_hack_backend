@@ -1,0 +1,251 @@
+# APIエンドポイント定義
+
+## ユーザー (User / Profile)
+
+`profiles` テーブルと連動し、マイページ機能を実現します。
+
+### GET /users/me (自分のプロフィール取得)
+
+-   **説明**: ログイン中のユーザー自身のプロフィール情報（ニックニックネームなど）を取得します。
+-   **認証**: 必要
+-   **レスポンス (200 OK)**:
+    ```json
+    {
+      "id": "user-uuid-12345",
+      "email": "user@example.com",
+      "nickname": "ギラサポ太郎"
+    }
+    ```
+
+### PUT /users/me (自分のプロフィール更新)
+
+-   **説明**: ログイン中のユーザー自身のニックネームを更新します。
+-   **認証**: 必要
+-   **リクエストボディ**:
+    ```json
+    {
+      "nickname": "北九太郎"
+    }
+    ```
+-   **レスポンス (200 OK)**:
+    ```json
+    {
+      "id": "user-uuid-12345",
+      "email": "user@example.com",
+      "nickname": "北九太郎"
+    }
+    ```
+
+---
+
+## ⚽️ 試合 (Matches)
+
+`matches` テーブルと連動します。
+
+### GET /matches (試合情報一覧取得)
+
+-   **説明**: 登録されているすべての試合情報の一覧を取得します。
+-   **認証**: 不要
+-   **レスポンス (200 OK)**:
+    ```json
+    [
+      {
+        "id": "match-uuid-67890",
+        "match_datetime": "2025-10-26T14:00:00+09:00",
+        "opponent": "〇〇FC",
+        "venue_name": "ミクニワールドスタジアム北九州",
+        "venue_latitude": 33.885,
+        "venue_longitude": 130.880
+      }
+    ]
+    ```
+
+---
+
+## 🏪 店舗 (Stores)
+
+`stores`, `reviews`, `player_recommendations` テーブルと連動します。
+
+### GET /stores/nearby (周辺のローカル店舗検索)
+
+-   **説明**: 指定された緯度経度の周辺にある「ローカル店舗」を検索します。（Google Places APIを利用）
+-   **認証**: 不要
+-   **クエリパラメータ**:
+    -   `lat` (float, 必須): 中止点の緯度
+    -   `lng` (float, 必須): 中止点の経度
+-   **レスポンス (200 OK)**:
+    ```json
+    [
+      {
+        "id": "store-uuid-abcde",
+        "google_place_id": "ChIJ...",
+        "name": "地元の美味しいお店",
+        "latitude": 33.886,
+        "longitude": 130.881,
+        "has_reviews": true,
+        "is_recommended": true
+      }
+    ]
+    ```
+
+### GET /stores/{store_id} (店舗詳細情報取得)
+
+-   **説明**: 特定の店舗の詳細情報、およびその店に紐づくすべての口コミと選手のおすすめ情報を取得します。
+-   **認証**: 不要
+-   **レスポンス (200 OK)**:
+    ```json
+    {
+      "id": "store-uuid-abcde",
+      "google_place_id": "ChIJ...",
+      "name": "地元の美味しいお店",
+      "address": "福岡県北九州市...",
+      "latitude": 33.886,
+      "longitude": 130.881,
+      "opening_hours": [
+        "月曜日: 11:00～20:00",
+        "火曜日: 11:00～20:00",
+        "..."
+      ],
+      "reviews": [
+        {
+          "id": "review-uuid-fghij",
+          "user_id": "user-uuid-12345",
+          "user_name": "ギラサポ太郎",
+          "rating": 5,
+          "comment": "ここの唐揚げ最高でした！",
+          "created_at": "2025-10-25T18:00:00+09:00"
+        }
+      ],
+      "recommendations": [
+        {
+          "id": "rec-uuid-klmno",
+          "player_name": "選手A",
+          "comment": "試合前は必ずここのカツ丼を食べます！"
+        }
+      ]
+    }
+    ```
+
+### POST /stores/{store_id}/reviews (口コミ投稿)
+
+-   **説明**: 特定の店舗に新しい口コミを投稿します。
+-   **認証**: 必要
+-   **リクエストボディ**:
+    ```json
+    {
+      "rating": 5,
+      "comment": "試合後に寄りました！最高！"
+    }
+    ```
+-   **レスポンス (201 Created)**: (投稿された口コミ情報)
+    ```json
+    {
+      "id": "review-uuid-pqrst",
+      "store_id": "store-uuid-abcde",
+      "user_id": "user-uuid-12345",
+      "user_name": "ギラサポ太郎",
+      "rating": 5,
+      "comment": "試合後に寄りました！最高！",
+      "created_at": "2025-10-26T20:00:00+09:00"
+    }
+    ```
+
+---
+
+## 🗺️ プラン (Plans)
+
+`plans` テーブルと連動し、Gemini APIを利用します。
+
+### POST /plans/generate (旅行プラン自動生成)
+
+-   **説明**: 試合情報と現在地を基に、Gemini APIが旅行プランを生成します。
+-   **認証**: 必要
+-   **リクエストボディ**:
+    ```json
+    {
+      "match_id": "match-uuid-67890",
+      "current_latitude": 33.880,
+      "current_longitude": 130.870,
+      "transport_mode": "drive"
+    }
+    ```
+-   **レスポンス (200 OK)**:
+    ```json
+    {
+      "plan_text": "試合観戦お疲れ様！まずはスタジアム近くの「〇〇カフェ」で一息ついて...",
+      "route": {
+        "waypoints": [
+          { "name": "現在地", "latitude": 33.880, "longitude": 130.870 },
+          { "name": "〇〇カフェ", "latitude": 33.89, "longitude": 130.89, "store_id": "store-uuid-111" },
+          { "name": "ミクニワールドスタジアム北九州", "latitude": 33.885, "longitude": 130.880 },
+          { "name": "△△飯店", "latitude": 33.90, "longitude": 130.90, "store_id": "store-uuid-222" }
+        ],
+        "total_duration_minutes": 120,
+        "steps": [
+          {
+            "from": "現在地",
+            "to": "〇〇カフェ",
+            "transport": "drive",
+            "duration_minutes": 15
+          },
+          "..."
+        ]
+      }
+    }
+    ```
+
+### POST /plans (旅行プラン保存)
+
+-   **説明**: 生成された旅行プランをDBに保存します。
+-   **認証**: 必要
+-   **リクエストボディ**:
+    ```json
+    {
+      "match_id": "match-uuid-67890",
+      "title": "2025/10/26 〇〇FC戦 観戦プラン",
+      "plan_details": "試合観戦お疲れ様！まずはスタジアム近くの「〇〇カフェ」で..."
+    }
+    ```
+-   **レスポンス (201 Created)**: (保存されたプラン情報)
+    ```json
+    {
+      "id": "plan-uuid-xyz",
+      "user_id": "user-uuid-12345",
+      "match_id": "match-uuid-67890",
+      "title": "2025/10/26 〇〇FC戦 観戦プラン",
+      "plan_details": "...",
+      "created_at": "2025-10-26T21:00:00+09:00"
+    }
+    ```
+
+### GET /plans (保存したプラン一覧取得)
+
+-   **説明**: ログイン中のユーザーが過去に保存したプランの一覧を取得します。
+-   **認証**: 必要
+-   **レスポンス (200 OK)**:
+    ```json
+    [
+      {
+        "id": "plan-uuid-xyz",
+        "match_id": "match-uuid-67890",
+        "title": "2025/10/26 〇〇FC戦 観戦プラン",
+        "created_at": "2025-10-26T21:00:00+09:00"
+      }
+    ]
+    ```
+
+### GET /plans/{plan_id} (保存したプラン詳細取得) (✨NEW✨)
+
+-   **説明**: ログイン中のユーザーが保存した、特定のプラン1件の詳細情報を取得します。
+-   **認証**: 必要
+-   **レスポンス (200 OK)**:
+    ```json
+    {
+      "id": "plan-uuid-xyz",
+      "user_id": "user-uuid-12345",
+      "match_id": "match-uuid-67890",
+      "title": "2025/10/26 〇〇FC戦 観戦プラン",
+      "plan_details": "試合観戦お疲れ様！まずはスタジアム近くの「〇〇カフェ」で...",
+      "created_at": "2025-10-26T21:00:00+09:00"
+    }
+    ```
