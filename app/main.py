@@ -35,6 +35,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ルータのインクルード
+from app.api import __init__ as _api_init  # noqa: F401  # 明示的にパッケージを解決
+from fastapi import APIRouter
+from app.api.serena import router as serena_router
+from app.api.stores import router as stores_router
+from app.api.users import router as users_router
+from app.api.matches import router as matches_router
+
+api_router = APIRouter()
+api_router.include_router(serena_router)
+api_router.include_router(stores_router)
+api_router.include_router(users_router)
+api_router.include_router(matches_router)
+
+app.include_router(api_router)
+
 
 @app.get("/health", tags=["Health"])
 async def health_check():
