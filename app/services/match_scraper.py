@@ -134,96 +134,106 @@ def scrape_matches() -> List[Dict[str, Any]]:
         # BeautifulSoupでパース
         soup = BeautifulSoup(response.text, "lxml")
 
-        # テーブルを探す
-        tables = soup.find_all("table")
+        # 試合スケジュールテーブルを探す（ul/li構造）
+        schedule_table = soup.find("div", class_="p-game__schedule-table")
+        if not schedule_table:
+            logger.warning("Schedule table div not found")
+            return []
 
-        for table in tables:
-            rows = table.find_all("tr")
+        # 試合行を取得（ヘッダー行を除く）
+        rows = schedule_table.find_all("li", class_="row")
 
-            for row in rows:
-                cells = row.find_all("td")
-                if len(cells) < 6:
+        for row in rows:
+            # ヘッダー行はスキップ
+            if "ttl" in row.get("class", []):
+                continue
+
+            try:
+                # 各列から情報を抽出
+                date_col = row.find("div", class_="date")
+                vs_col = row.find("div", class_="vs")
+                stadium_col = row.find("div", class_="stadium")
+
+                if not date_col or not vs_col or not stadium_col:
                     continue
 
-                try:
-                    # 各列から情報を抽出
-                    # 節、日時、対戦カード、開催地、会場、放送予定
-                    date_cell = cells[1].get_text(strip=True) if len(cells) > 1 else ""
-                    match_cell = cells[2].get_text(strip=True) if len(cells) > 2 else ""
-                    venue_cell = cells[4].get_text(strip=True) if len(cells) > 4 else ""
+                # 日時を取得（例: "2.22(土)14:00"）
+                date_text = date_col.get_text(strip=True)
+                # 空白を除去
+                date_text = re.sub(r'\s+', '', date_text)
 
-                    # 日時を分割（例: "2.22(土) 14:00"）
-                    datetime_parts = date_cell.split()
-                    if len(datetime_parts) < 2:
-                        continue
+                # 正規表現で日付と時刻を抽出（例: "2.22(土)14:00" -> "2.22" と "14:00"）
+                date_match = re.match(r'^(\d+\.\d+)\([^)]+\)(.+)$', date_text)
+                if not date_match:
+                    logger.debug(f"Could not parse date format: {date_text}")
+                    continue
 
-                    date_str = datetime_parts[0]
-                    time_str = datetime_parts[1]
+                date_str = date_match.group(1)  # "2.22"
+                time_str = date_match.group(2)  # "14:00"
 
-                    # 対戦相手を抽出（例: "北九州 2:0 長野" -> "長野"）
-                    # または "vs 〇〇"形式
-                    opponent = None
-                    if "vs" in match_cell:
-                        opponent_match = re.search(r"vs\s+(.+)", match_cell)
+                # 対戦相手を抽出
+                # span.team要素から直接チーム名を取得
+                team_elements = vs_col.find_all("span", class_="team")
+                opponent = None
+
+                if len(team_elements) >= 2:
+                    # 2つのチーム名が見つかった場合、北九州以外を対戦相手とする
+                    for team_el in team_elements:
+                        team_name = team_el.get_text(strip=True)
+                        if "北九州" not in team_name:
+                            opponent = team_name
+                            break
+                else:
+                    # team要素が見つからない場合はテキストから抽出を試みる
+                    vs_text = vs_col.get_text(strip=True)
+                    # vs形式の場合
+                    if "vs" in vs_text:
+                        opponent_match = re.search(r"vs\s*(.+)", vs_text)
                         if opponent_match:
                             opponent = opponent_match.group(1).strip()
-                    else:
-                        # スコア形式から抽出
-                        parts = re.split(r"\d+:\d+", match_cell)
-                        if len(parts) >= 2:
-                            teams = [p.strip() for p in parts if p.strip()]
-                            # 北九州以外のチームを対戦相手とする
-                            for team in teams:
-                                if "北九州" not in team:
-                                    opponent = team
-                                    break
+                            # "試合情報"などを除去
+                            opponent = re.sub(r'試合.*', '', opponent).strip()
 
-                    if not opponent:
-                        # 対戦カードから直接抽出を試みる
-                        if "北九州" in match_cell:
-                            # "北九州" を除外して残りをopponentとする簡易処理
-                            opponent = match_cell.replace("北九州", "").strip()
-                            # スコアや記号を除去
-                            opponent = re.sub(r"[0-9:\-\s]+", " ", opponent).strip()
-
-                    if not opponent:
-                        continue
-
-                    # 会場名
-                    venue_name = venue_cell
-                    if not venue_name:
-                        continue
-
-                    # 日時をパース
-                    match_datetime = parse_match_datetime(date_str, time_str)
-                    if not match_datetime:
-                        continue
-
-                    # 会場の位置情報を取得
-                    venue_info = get_venue_location(venue_name)
-                    if not venue_info:
-                        logger.warning(f"Could not get location for venue: {venue_name}")
-                        # デフォルト値を使用（ミクスタ）
-                        venue_info = VENUE_LOCATIONS.get("ミクスタ", {
-                            "name": venue_name,
-                            "latitude": 33.8850,
-                            "longitude": 130.8800,
-                        })
-
-                    match_data = {
-                        "match_datetime": match_datetime.isoformat(),
-                        "opponent": opponent,
-                        "venue_name": venue_info["name"],
-                        "venue_latitude": venue_info["latitude"],
-                        "venue_longitude": venue_info["longitude"],
-                    }
-
-                    matches.append(match_data)
-                    logger.info(f"Scraped match: {opponent} on {match_datetime} at {venue_name}")
-
-                except Exception as e:
-                    logger.error(f"Error parsing row: {e}")
+                if not opponent:
+                    logger.debug(f"Could not extract opponent from row")
                     continue
+
+                # 会場名を取得
+                venue_name = stadium_col.get_text(strip=True)
+                if not venue_name:
+                    continue
+
+                # 日時をパース
+                match_datetime = parse_match_datetime(date_str, time_str)
+                if not match_datetime:
+                    logger.debug(f"Could not parse datetime: {date_str} {time_str}")
+                    continue
+
+                # 会場の位置情報を取得
+                venue_info = get_venue_location(venue_name)
+                if not venue_info:
+                    logger.warning(f"Could not get location for venue: {venue_name}")
+                    # デフォルト値を使用（ミクスタ）
+                    venue_info = VENUE_LOCATIONS.get("ミクスタ", {
+                        "name": venue_name,
+                        "latitude": 33.8850,
+                        "longitude": 130.8800,
+                    })
+
+                match_data = {
+                    "match_datetime": match_datetime.isoformat(),
+                    "opponent": opponent,
+                    "venue_name": venue_info["name"],
+                    "venue_latitude": venue_info["latitude"],
+                    "venue_longitude": venue_info["longitude"],
+                }
+
+                matches.append(match_data)
+                logger.info(f"Scraped match: {opponent} on {match_datetime} at {venue_name}")
+
+            except Exception as e:
+                logger.error(f"Error parsing row: {e}")
+                continue
 
         logger.info(f"Successfully scraped {len(matches)} matches")
         return matches
