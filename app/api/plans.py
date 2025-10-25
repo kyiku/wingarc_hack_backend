@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 from uuid import UUID
 from typing import List
-from app.auth import get_current_user
+from app.auth import get_current_user, ensure_rls
 from app.database import get_supabase
 from app.models.plan import (
     PlanGenerateRequest,
@@ -20,7 +20,7 @@ from app.services.gemini_client import generate_travel_plan
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/plans", tags=["Plans"])
+router = APIRouter(prefix="/plans", tags=["Plans"], dependencies=[Depends(ensure_rls)])
 
 
 @router.post("/generate", response_model=PlanGenerateResponse)
@@ -68,7 +68,7 @@ async def generate_plan(
         logger.error(f"試合情報取得エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"試合情報の取得中にエラーが発生しました: {str(e)}",
+            detail="試合情報の取得中にエラーが発生しました",
         )
 
     # Gemini APIを使って旅行プランを生成
@@ -79,7 +79,7 @@ async def generate_plan(
             current_longitude=request.current_longitude,
             transport_mode=request.transport_mode.value,
         )
-        logger.info(f"Successfully generated travel plan for match {request.match_id}")
+        logger.info(f"試合 {request.match_id} の旅行プラン生成に成功しました")
         return plan
 
     except ValueError as e:
@@ -93,7 +93,7 @@ async def generate_plan(
         logger.error(f"プラン生成エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"旅行プランの生成中にエラーが発生しました: {str(e)}",
+            detail="旅行プランの生成中にエラーが発生しました",
         )
 
 
@@ -132,9 +132,10 @@ async def create_plan(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"試合の存在確認エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"試合の確認中にエラーが発生しました: {str(e)}",
+            detail="試合の確認中にエラーが発生しました",
         )
 
     # プランを保存
@@ -160,9 +161,10 @@ async def create_plan(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"プラン保存エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"プランの保存中にエラーが発生しました: {str(e)}",
+            detail="プランの保存中にエラーが発生しました",
         )
 
 
@@ -201,9 +203,10 @@ async def get_plans(
         return plans
 
     except Exception as e:
+        logger.error(f"プラン一覧取得エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"プラン一覧の取得中にエラーが発生しました: {str(e)}",
+            detail="プラン一覧の取得中にエラーが発生しました",
         )
 
 
@@ -255,7 +258,8 @@ async def get_plan(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"プラン取得エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"プランの取得中にエラーが発生しました: {str(e)}",
+            detail="プランの取得中にエラーが発生しました",
         )

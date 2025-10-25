@@ -27,12 +27,13 @@ logger = logging.getLogger(__name__)
 
 # Gemini APIの初期化
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  # デフォルトは gemini-2.5-flash
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    logger.info("Gemini API initialized successfully")
+    logger.info(f"Gemini API を初期化しました (モデル: {GEMINI_MODEL})")
 else:
-    logger.warning("GEMINI_API_KEY not found in environment variables")
+    logger.warning("環境変数 GEMINI_API_KEY が見つかりません")
 
 
 def generate_travel_plan(
@@ -69,8 +70,8 @@ def generate_travel_plan(
     )
 
     try:
-        # Gemini 2.5 Flashモデルを使用（高速かつコスト効率的）
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        # Gemini モデルを使用（環境変数で設定可能）
+        model = genai.GenerativeModel(GEMINI_MODEL)
 
         # JSON形式でのレスポンスを要求
         generation_config = GenerationConfig(
@@ -78,7 +79,7 @@ def generate_travel_plan(
             response_mime_type="application/json",
         )
 
-        logger.info(f"Calling Gemini API for match: {match_info.get('opponent')}")
+        logger.info(f"Gemini API を呼び出し中: 試合={match_info.get('opponent')}")
         response = model.generate_content(
             prompt,
             generation_config=generation_config,
@@ -86,18 +87,18 @@ def generate_travel_plan(
 
         # レスポンスのパース
         plan_data = json.loads(response.text)
-        logger.info("Successfully generated travel plan from Gemini API")
+        logger.info("Gemini API から旅行プランの生成に成功しました")
 
         # PlanGenerateResponseに変換
         return _parse_gemini_response(plan_data)
 
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Gemini response as JSON: {e}")
-        logger.error(f"Response text: {response.text if 'response' in locals() else 'N/A'}")
+        logger.error(f"Gemini レスポンスのJSON解析に失敗: {e}")
+        logger.error(f"レスポンステキスト: {response.text if 'response' in locals() else 'N/A'}")
         raise Exception("Gemini APIからの応答をJSONとして解析できませんでした")
     except Exception as e:
-        logger.error(f"Error calling Gemini API: {e}", exc_info=True)
-        raise Exception(f"旅行プランの生成中にエラーが発生しました: {str(e)}")
+        logger.error(f"Gemini API 呼び出しエラー: {e}", exc_info=True)
+        raise Exception("旅行プランの生成中にエラーが発生しました")
 
 
 def _build_prompt(
@@ -238,6 +239,6 @@ def _parse_gemini_response(plan_data: Dict[str, Any]) -> PlanGenerateResponse:
         )
 
     except (KeyError, ValueError, TypeError) as e:
-        logger.error(f"Failed to parse Gemini response: {e}")
-        logger.error(f"Plan data: {plan_data}")
-        raise Exception(f"Gemini APIの応答形式が不正です: {str(e)}")
+        logger.error(f"Gemini レスポンスのパースに失敗: {e}")
+        logger.error(f"プランデータ: {plan_data}")
+        raise Exception("Gemini APIの応答形式が不正です")
