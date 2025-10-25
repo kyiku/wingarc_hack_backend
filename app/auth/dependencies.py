@@ -47,6 +47,7 @@ async def get_current_user(
             "id": user.id,
             "email": user.email,
             "user_metadata": user.user_metadata or {},
+            "access_token": token,
         }
 
     except HTTPException:
@@ -90,6 +91,7 @@ async def get_optional_user(
             "id": user.id,
             "email": user.email,
             "user_metadata": user.user_metadata or {},
+            "access_token": token,
         }
     except Exception:
         return None

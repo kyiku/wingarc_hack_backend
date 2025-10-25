@@ -45,6 +45,14 @@ async def generate_plan(
     Raises:
         HTTPException: 試合が見つからない場合（404）
     """
+    # PostgREST にエンドユーザーのJWTを付与（RLS前提のクエリ用）
+    try:
+        postgrest = getattr(supabase, "postgrest", None)
+        if postgrest and hasattr(postgrest, "auth"):
+            postgrest.auth(current_user.get("access_token", ""))
+    except Exception:
+        pass
+
     # 試合の存在確認
     try:
         match_response = (
@@ -132,6 +140,13 @@ async def create_plan(
         HTTPException: 試合が見つからない場合（404）、データベースエラー（500）
     """
     user_id = current_user["id"]
+    # PostgREST にエンドユーザーのJWTを付与（RLSのINSERT適用のため）
+    try:
+        postgrest = getattr(supabase, "postgrest", None)
+        if postgrest and hasattr(postgrest, "auth"):
+            postgrest.auth(current_user.get("access_token", ""))
+    except Exception:
+        pass
 
     # 試合の存在確認
     try:
@@ -199,6 +214,13 @@ async def get_plans(
         HTTPException: データベースエラー（500）
     """
     user_id = current_user["id"]
+    # PostgREST にエンドユーザーのJWTを付与（RLSのSELECT適用のため）
+    try:
+        postgrest = getattr(supabase, "postgrest", None)
+        if postgrest and hasattr(postgrest, "auth"):
+            postgrest.auth(current_user.get("access_token", ""))
+    except Exception:
+        pass
 
     try:
         response = (
@@ -243,6 +265,13 @@ async def get_plan(
         HTTPException: プランが見つからない場合（404）、権限がない場合（403）
     """
     user_id = current_user["id"]
+    # PostgREST にエンドユーザーのJWTを付与（RLSのSELECT適用のため）
+    try:
+        postgrest = getattr(supabase, "postgrest", None)
+        if postgrest and hasattr(postgrest, "auth"):
+            postgrest.auth(current_user.get("access_token", ""))
+    except Exception:
+        pass
 
     try:
         response = supabase.table("plans").select("*").eq("id", str(plan_id)).execute()

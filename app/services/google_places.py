@@ -16,7 +16,11 @@ except Exception:  # pragma: no cover - optional dependency at runtime
     googlemaps = None  # type: ignore
 
 from app.models.store import StoreSummary
-from app.services.chain_filter import filter_out_chain_items
+from app.services.chain_filter import (
+    filter_out_chain_items,
+    filter_out_chain_items_dyn,
+    get_dynamic_chain_keywords,
+)
 
 
 def _to_store_summary(place: dict) -> Optional[StoreSummary]:
@@ -115,8 +119,18 @@ def search_nearby_local_stores(
         )
         results: Iterable[dict] = resp.get("results", [])
 
-        # Filter out chain brands.
-        filtered = filter_out_chain_items(results, lambda p: str(p.get("name", "")))
+        # Filter out chain brands. Prefer DB-provided chain list when available.
+        extra = []
+        try:
+            extra = get_dynamic_chain_keywords()
+        except Exception:
+            extra = []
+        if extra:
+            filtered = filter_out_chain_items_dyn(
+                results, lambda p: str(p.get("name", "")), extra_keywords=extra
+            )
+        else:
+            filtered = filter_out_chain_items(results, lambda p: str(p.get("name", "")))
 
         # Map to StoreSummary and drop invalid entries.
         summaries = [_to_store_summary(p) for p in filtered]

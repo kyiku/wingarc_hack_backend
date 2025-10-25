@@ -3,7 +3,6 @@
 """
 
 from pydantic import BaseModel, Field
-from datetime import datetime
 from uuid import UUID
 
 
@@ -12,15 +11,15 @@ class ProfileBase(BaseModel):
     nickname: str = Field(..., min_length=1, max_length=50, description="ユーザーのニックネーム")
 
 
-class ProfileUpdate(BaseModel):
+class UserProfileUpdate(BaseModel):
     """プロフィール更新リクエスト"""
     nickname: str = Field(..., min_length=1, max_length=50, description="新しいニックネーム")
 
 
-class ProfileResponse(ProfileBase):
-    """プロフィールレスポンス"""
+class UserProfileResponse(ProfileBase):
+    """プロフィールレスポンス（id, email, nickname のみ）"""
     id: UUID
-    updated_at: datetime
+    email: str = Field(description="ユーザーのメールアドレス")
 
     model_config = {"from_attributes": True}
 
@@ -30,3 +29,7 @@ class UserInfo(BaseModel):
     id: str
     email: str
     user_metadata: dict = {}
+
+# 後方互換エイリアス（既存参照のため）
+ProfileResponse = UserProfileResponse
+ProfileUpdate = UserProfileUpdate
