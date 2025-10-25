@@ -7,10 +7,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
+from contextlib import asynccontextmanager
 from app.api import users_router, stores_router, plans_router, matches_router
+from app.scheduler import start_scheduler, shutdown_scheduler, run_scraper_now
 
 # 環境変数を読み込み
 load_dotenv()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """アプリケーションのライフサイクル管理"""
+    # 起動時
+    start_scheduler()
+    yield
+    # シャットダウン時
+    shutdown_scheduler()
+
 
 # FastAPIアプリケーションのインスタンス化
 app = FastAPI(
@@ -19,6 +32,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS設定
@@ -71,6 +85,27 @@ async def root():
         "version": "0.1.0",
         "docs": "/docs",
     }
+
+
+@app.post("/admin/scrape-matches", tags=["Admin"])
+async def trigger_match_scraper():
+    """
+    試合情報スクレイパーを手動で実行する（管理者用）
+
+    Returns:
+        dict: 実行結果
+    """
+    try:
+        run_scraper_now()
+        return {
+            "status": "success",
+            "message": "Match scraper executed successfully",
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to run scraper: {str(e)}",
+        }
 
 
 if __name__ == "__main__":
