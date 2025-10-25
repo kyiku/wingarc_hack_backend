@@ -3,10 +3,13 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
+from postgrest.exceptions import APIError
+import logging
 from supabase import Client
 from uuid import UUID
 from typing import List
-from app.auth import get_current_user
+from app.auth import get_current_user, ensure_rls
 from app.database import get_supabase
 from app.models.plan import (
     PlanGenerateRequest,
@@ -19,7 +22,9 @@ from app.models.plan import (
     Route,
 )
 
-router = APIRouter(prefix="/plans", tags=["Plans"])
+router = APIRouter(prefix="/plans", tags=["Plans"], dependencies=[Depends(ensure_rls)])
+
+logger = logging.getLogger(__name__)
 
 
 @router.post("/generate", response_model=PlanGenerateResponse)
@@ -45,13 +50,7 @@ async def generate_plan(
     Raises:
         HTTPException: 試合が見つからない場合（404）
     """
-    # PostgREST にエンドユーザーのJWTを付与（RLS前提のクエリ用）
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     # 試合の存在確認
     try:
@@ -72,10 +71,17 @@ async def generate_plan(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("試合情報の取得でHTTP/Timeoutエラー")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"試合情報の取得中にエラーが発生しました: {str(e)}",
+            detail="試合情報の取得に失敗しました",
+        )
+    except Exception:
+        logger.exception("試合情報の取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="試合情報の取得に失敗しました",
         )
 
     # TODO: 実際にはGemini APIを呼び出してプランを生成
@@ -140,13 +146,7 @@ async def create_plan(
         HTTPException: 試合が見つからない場合（404）、データベースエラー（500）
     """
     user_id = current_user["id"]
-    # PostgREST にエンドユーザーのJWTを付与（RLSのINSERT適用のため）
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     # 試合の存在確認
     try:
@@ -158,10 +158,17 @@ async def create_plan(
             )
     except HTTPException:
         raise
-    except Exception as e:
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("試合の存在確認でHTTP/Timeoutエラー")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"試合の確認中にエラーが発生しました: {str(e)}",
+            detail="試合の確認中にエラーが発生しました",
+        )
+    except Exception:
+        logger.exception("試合の存在確認中にエラーが発生しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="試合の確認中にエラーが発生しました",
         )
 
     # プランを保存
@@ -186,10 +193,17 @@ async def create_plan(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("プラン保存でHTTP/Timeoutエラー")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"プランの保存中にエラーが発生しました: {str(e)}",
+            detail="プランの保存に失敗しました",
+        )
+    except Exception:
+        logger.exception("プランの保存中にエラーが発生しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="プランの保存に失敗しました",
         )
 
 
@@ -214,13 +228,7 @@ async def get_plans(
         HTTPException: データベースエラー（500）
     """
     user_id = current_user["id"]
-    # PostgREST にエンドユーザーのJWTを付与（RLSのSELECT適用のため）
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     try:
         response = (
@@ -234,10 +242,17 @@ async def get_plans(
         plans = [PlanListResponse(**plan) for plan in response.data]
         return plans
 
-    except Exception as e:
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("プラン一覧取得でHTTP/Timeoutエラー")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"プラン一覧の取得中にエラーが発生しました: {str(e)}",
+            detail="プラン一覧の取得に失敗しました",
+        )
+    except Exception:
+        logger.exception("プラン一覧の取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="プラン一覧の取得に失敗しました",
         )
 
 
@@ -265,13 +280,7 @@ async def get_plan(
         HTTPException: プランが見つからない場合（404）、権限がない場合（403）
     """
     user_id = current_user["id"]
-    # PostgREST にエンドユーザーのJWTを付与（RLSのSELECT適用のため）
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     try:
         response = supabase.table("plans").select("*").eq("id", str(plan_id)).execute()
@@ -295,8 +304,15 @@ async def get_plan(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("プラン取得でHTTP/Timeoutエラー")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"プランの取得中にエラーが発生しました: {str(e)}",
+            detail="プランの取得に失敗しました",
+        )
+    except Exception:
+        logger.exception("プランの取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="プランの取得に失敗しました",
         )

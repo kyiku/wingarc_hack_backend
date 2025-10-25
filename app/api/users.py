@@ -3,12 +3,15 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+import logging
 from supabase import Client
-from app.auth import get_current_user
+from app.auth import get_current_user, ensure_rls
 from app.database import get_supabase
 from app.models.user import ProfileResponse, ProfileUpdate
 
-router = APIRouter(prefix="/users", tags=["Users"])
+router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(ensure_rls)])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/me", response_model=ProfileResponse)
@@ -25,13 +28,6 @@ async def get_my_profile(
         ProfileResponse: ユーザーのプロフィール情報
     """
     user_id = current_user["id"]
-    # PostgREST にエンドユーザーのJWTを付与し、RLSを有効化
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
 
     # profilesテーブルからユーザープロフィールを取得
     # 1) まずはDB側の結合RPCを優先（auth.users × profiles）
@@ -46,6 +42,8 @@ async def get_my_profile(
                 nickname=row.get("nickname") or "",
             )
     except Exception:
+        # RPCの利用不可（未定義・権限）などはフォールバック
+        logger.debug("get_me_profile RPCの呼び出しに失敗。profiles直参照へフォールバック")
         pass
 
     # 2) フォールバック: profiles から取得し、email はAuth情報から合成
@@ -80,13 +78,6 @@ async def update_my_profile(
         ProfileResponse: 更新後のプロフィール情報
     """
     user_id = current_user["id"]
-    # PostgREST にエンドユーザーのJWTを付与し、RLSを有効化
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
 
     # 1) まずは結合RPCで更新＋取得
     try:
@@ -102,6 +93,8 @@ async def update_my_profile(
                 nickname=row.get("nickname") or "",
             )
     except Exception:
+        # RPCの利用不可（未定義・権限）などはフォールバック
+        logger.debug("update_my_nickname RPCの呼び出しに失敗。profiles直接更新へフォールバック")
         pass
 
     # 2) フォールバック: profilesを直接更新して合成

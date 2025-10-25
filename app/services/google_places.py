@@ -8,12 +8,18 @@ and adapt results to our application models.
 from __future__ import annotations
 
 import os
+import logging
 from typing import Iterable, List, Optional
 
 try:
     import googlemaps  # type: ignore
+    try:  # narrow exceptions when possible
+        from googlemaps.exceptions import ApiError, TransportError, Timeout  # type: ignore
+    except Exception:  # pragma: no cover - optional import variants
+        ApiError = TransportError = Timeout = Exception  # type: ignore
 except Exception:  # pragma: no cover - optional dependency at runtime
     googlemaps = None  # type: ignore
+    ApiError = TransportError = Timeout = Exception  # type: ignore
 
 from app.models.store import StoreSummary
 from app.services.chain_filter import (
@@ -22,6 +28,7 @@ from app.services.chain_filter import (
     get_dynamic_chain_keywords,
 )
 
+logger = logging.getLogger(__name__)
 
 def _to_store_summary(place: dict) -> Optional[StoreSummary]:
     """Convert a Google Places ``place`` dict to ``StoreSummary``.
@@ -36,7 +43,7 @@ def _to_store_summary(place: dict) -> Optional[StoreSummary]:
         loc = geom.get("location", {})
         lat = float(loc.get("lat"))
         lng = float(loc.get("lng"))
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
     if not place_id or not name:
@@ -124,6 +131,8 @@ def search_nearby_local_stores(
         try:
             extra = get_dynamic_chain_keywords()
         except Exception:
+            # 動的キーワード取得失敗はフィルタなしで継続
+            logger.debug("動的チェーンキーワードの取得に失敗。静的フィルタにフォールバック")
             extra = []
         if extra:
             filtered = filter_out_chain_items_dyn(
@@ -136,7 +145,11 @@ def search_nearby_local_stores(
         summaries = [_to_store_summary(p) for p in filtered]
         summaries = [s for s in summaries if s is not None]
         return summaries[:max_results]
+    except (ApiError, TransportError, Timeout):
+        logger.warning("Google Places APIエラー。スタブ結果にフォールバック")
+        return _stub_results(latitude, longitude)[:max_results]
     except Exception:
-        # On any API/runtime error, fall back to stub to keep the endpoint robust.
+        # On any other runtime error, fall back to stub to keep the endpoint robust.
+        logger.exception("Google Places処理中に予期しないエラー")
         return _stub_results(latitude, longitude)[:max_results]
 

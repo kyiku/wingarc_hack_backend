@@ -8,7 +8,13 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from app.models.match import MatchResponse
+import httpx
+import logging
+from postgrest.exceptions import APIError
 from app.services.supabase_client import get_client
+
+
+logger = logging.getLogger(__name__)
 
 
 def _stub_matches() -> List[MatchResponse]:
@@ -70,11 +76,20 @@ def list_matches(*, start: Optional[datetime] = None, end: Optional[datetime] = 
                         venue_longitude=float(row.get("venue_longitude")),
                     )
                 )
-            except Exception:
+            except (TypeError, ValueError, KeyError):
                 # Skip malformed rows
                 continue
         return results
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("matches取得に失敗。スタブにフォールバック")
+        items = _stub_matches()
+        if start is not None:
+            items = [m for m in items if m.match_datetime >= start]
+        if end is not None:
+            items = [m for m in items if m.match_datetime <= end]
+        return items
     except Exception:
+        logger.exception("matches取得で予期しないエラー。スタブにフォールバック")
         items = _stub_matches()
         if start is not None:
             items = [m for m in items if m.match_datetime >= start]

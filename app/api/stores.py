@@ -8,19 +8,28 @@ with basic chain-store filtering.
 from __future__ import annotations
 
 from typing import List, Optional, Dict, Set
+import logging
+import httpx
+import httpx
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from supabase import Client
+from postgrest.exceptions import APIError
 
-from app.auth import get_current_user
+from app.auth import get_current_user, ensure_rls
 from app.database import get_supabase
 from app.models.store import StoreSummary, StoreDetail, PlayerRecommendation
 from app.models.review import ReviewCreate, ReviewResponse
 from app.services.google_places import search_nearby_local_stores
+from app.services.opening_hours import parse_opening_hours
+from app.models.db_rows import StoreIdMapRow, StoreIdOnlyRow
+from app.services.review_service import list_reviews_with_usernames
 
 
-router = APIRouter(prefix="/stores", tags=["Stores"])
+router = APIRouter(prefix="/stores", tags=["Stores"], dependencies=[Depends(ensure_rls)])
+
+logger = logging.getLogger(__name__)
 
 
 @router.get("/nearby", response_model=List[StoreSummary])
@@ -54,16 +63,23 @@ def get_nearby_stores(
 
             gpids = [s.google_place_id for s in stores]
             # storesテーブルで対応するレコードを一括取得
-            resp = client.table("stores").select("id,google_place_id").in_("google_place_id", gpids).execute()
+            resp = (
+                client.table("stores")
+                .select("id,google_place_id")
+                .in_("google_place_id", gpids)
+                .execute()
+            )
             rows = getattr(resp, "data", None) or []
             gpid_to_id: Dict[str, str] = {}
             store_ids: List[str] = []
             for r in rows:
-                sid = r.get("id")
-                gpid = r.get("google_place_id")
-                if sid and gpid:
-                    gpid_to_id[str(gpid)] = str(sid)
-                    store_ids.append(str(sid))
+                try:
+                    row = StoreIdMapRow.model_validate(r)
+                    gpid_to_id[row.google_place_id] = row.id
+                    store_ids.append(row.id)
+                except Exception:
+                    # 不正な行は無視
+                    continue
 
             if not store_ids:
                 return stores
@@ -72,24 +88,36 @@ def get_nearby_stores(
             has_review_ids: Set[str] = set()
             try:
                 rresp = (
-                    client.table("reviews").select("store_id").in_("store_id", store_ids).execute()
+                    client.table("reviews")
+                    .select("store_id")
+                    .in_("store_id", store_ids)
+                    .execute()
                 )
                 for rr in getattr(rresp, "data", None) or []:
-                    sid = rr.get("store_id")
-                    if sid:
-                        has_review_ids.add(str(sid))
+                    try:
+                        sid = StoreIdOnlyRow.model_validate(rr).store_id
+                        if sid:
+                            has_review_ids.add(str(sid))
+                    except Exception:
+                        continue
             except Exception:
                 has_review_ids = set()
 
             rec_ids: Set[str] = set()
             try:
                 presp = (
-                    client.table("player_recommendations").select("store_id").in_("store_id", store_ids).execute()
+                    client.table("player_recommendations")
+                    .select("store_id")
+                    .in_("store_id", store_ids)
+                    .execute()
                 )
                 for pr in getattr(presp, "data", None) or []:
-                    sid = pr.get("store_id")
-                    if sid:
-                        rec_ids.add(str(sid))
+                    try:
+                        sid = StoreIdOnlyRow.model_validate(pr).store_id
+                        if sid:
+                            rec_ids.add(str(sid))
+                    except Exception:
+                        continue
             except Exception:
                 rec_ids = set()
 
@@ -102,13 +130,20 @@ def get_nearby_stores(
                     s.is_recommended = sid in rec_ids
 
             return stores
-        except Exception:
-            # DB連携で問題があっても検索結果自体は返す
+        except (httpx.TimeoutException, httpx.HTTPError, APIError):
+            # Supabase接続/HTTPエラー時は検索結果自体は返す
+            logger.warning("近隣検索のDB注釈でHTTP/Timeoutエラー。注釈はスキップ")
             return stores
+        except Exception:
+            # 予期しないエラーでも検索結果自体は返す（詳細はサーバーログへ）
+            logger.exception("近隣検索のDB注釈で予期しないエラー")
+            # プログラミングエラー等は握りつぶさず外側へ伝播させる
+            raise
     except HTTPException:
         raise
     except Exception:
         # 予期しないエラーは詳細を伏せて500を返す（メッセージは日本語で統一）
+        logger.exception("近隣店舗検索で予期しないエラー")
         raise HTTPException(status_code=500, detail="近隣店舗の検索に失敗しました")
 
 
@@ -137,127 +172,21 @@ async def get_store_detail(
         store = store_resp.data
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"店舗情報の取得に失敗しました: {exc}")
+    except Exception:
+        logger.exception("店舗情報の取得に失敗しました")
+        raise HTTPException(status_code=500, detail="店舗情報の取得に失敗しました")
 
     # 開店時間はDB側でjsonb。配列の文字列に丸める（可能なら）
     opening_hours_raw: Optional[object] = store.get("opening_hours")
-    opening_hours: Optional[List[str]] = None
+    opening_hours: Optional[List[str]] = parse_opening_hours(opening_hours_raw)
+
+    # 2) レビュー一覧の取得（サービス層に委譲）
     try:
-        if isinstance(opening_hours_raw, list):
-            # 文字列配列であればそのまま、辞書配列なら代表的な文字列を抽出
-            if all(isinstance(x, str) for x in opening_hours_raw):
-                opening_hours = opening_hours_raw  # type: ignore[assignment]
-            elif all(isinstance(x, dict) for x in opening_hours_raw):
-                # Google Placesのweekday_textのようなフィールドがあれば使う
-                candidate = []
-                for item in opening_hours_raw:  # type: ignore[assignment]
-                    text = item.get("weekday_text") or item.get("text")
-                    if isinstance(text, str):
-                        candidate.append(text)
-                opening_hours = candidate or None
-        elif isinstance(opening_hours_raw, dict):
-            # { weekday_text: [...] } 形式を想定
-            wt = opening_hours_raw.get("weekday_text")
-            if isinstance(wt, list) and all(isinstance(x, str) for x in wt):
-                opening_hours = wt  # type: ignore[assignment]
+        reviews: List[ReviewResponse] = list_reviews_with_usernames(
+            supabase=supabase, store_id=str(store_id), limit=50
+        )
     except Exception:
-        opening_hours = None
-
-    # 2) レビュー一覧の取得（ユーザー名解決を含む）
-    # 最適化: PostgREST のリレーション埋め込みで 1 クエリ化を試み、
-    # 失敗時は IN 句による2段階解決にフォールバックする。
-    reviews: List[ReviewResponse] = []
-    try:
-        try:
-            # 埋め込み: reviews ←(FK: user_id)→ profiles(nickname)
-            rev_resp = (
-                supabase.table("reviews")
-                .select(
-                    "id, store_id, user_id, rating, comment, created_at, profiles(nickname)"
-                )
-                .eq("store_id", str(store_id))
-                .order("created_at", desc=True)
-                .execute()
-            )
-
-            rows = getattr(rev_resp, "data", None) or []
-            for row in rows:
-                try:
-                    profile = row.get("profiles")
-                    nickname: Optional[str] = None
-                    if isinstance(profile, dict):
-                        nickname = profile.get("nickname")
-                    elif isinstance(profile, list) and profile:
-                        first = profile[0]
-                        if isinstance(first, dict):
-                            nickname = first.get("nickname")
-                    user_name = nickname if isinstance(nickname, str) and nickname else "匿名ユーザー"
-                    reviews.append(
-                        ReviewResponse(
-                            id=row.get("id"),
-                            store_id=row.get("store_id"),
-                            user_id=row.get("user_id"),
-                            user_name=user_name,
-                            rating=row.get("rating"),
-                            comment=row.get("comment"),
-                            created_at=row.get("created_at"),
-                        )
-                    )
-                except Exception:
-                    # 型不一致などでスキップ
-                    continue
-        except Exception:
-            # フォールバック: reviews を取得 → user_id をまとめて抽出 → profiles を IN 句で一括取得
-            rev_resp = (
-                supabase.table("reviews")
-                .select("id, store_id, user_id, rating, comment, created_at")
-                .eq("store_id", str(store_id))
-                .order("created_at", desc=True)
-                .execute()
-            )
-
-            rows = rev_resp.data or []
-            user_ids = [str(r.get("user_id")) for r in rows if r.get("user_id")]
-            unique_user_ids = sorted(set(user_ids))
-
-            nickname_map: Dict[str, str] = {}
-            if unique_user_ids:
-                try:
-                    prof_resp = (
-                        supabase.table("profiles")
-                        .select("id, nickname")
-                        .in_("id", unique_user_ids)
-                        .execute()
-                    )
-                    for pr in getattr(prof_resp, "data", None) or []:
-                        uid = pr.get("id")
-                        nk = pr.get("nickname")
-                        if uid and isinstance(uid, str):
-                            if isinstance(nk, str) and nk:
-                                nickname_map[str(uid)] = nk
-                except Exception:
-                    nickname_map = {}
-
-            for row in rows:
-                try:
-                    uid = row.get("user_id")
-                    user_name = nickname_map.get(str(uid), "匿名ユーザー")
-                    reviews.append(
-                        ReviewResponse(
-                            id=row.get("id"),
-                            store_id=row.get("store_id"),
-                            user_id=uid,
-                            user_name=user_name,
-                            rating=row.get("rating"),
-                            comment=row.get("comment"),
-                            created_at=row.get("created_at"),
-                        )
-                    )
-                except Exception:
-                    continue
-    except Exception:
-        # レビューは取得失敗しても全体を落とさず、空配列で返す
+        logger.exception("レビュー一覧の取得に失敗しました")
         reviews = []
 
     # 3) 選手おすすめの取得
@@ -279,9 +208,10 @@ async def get_store_detail(
                         comment=str(row.get("comment")),
                     )
                 )
-            except Exception:
+            except (TypeError, ValueError, KeyError, AttributeError):
                 continue
     except Exception:
+        logger.exception("選手おすすめ情報の取得に失敗しました")
         recommendations = []
 
     # 4) まとめて返す
@@ -323,13 +253,7 @@ async def create_review(
         HTTPException: 店舗が見つからない場合（404）、データベースエラー（500）
     """
     user_id = current_user["id"]
-    # PostgREST にエンドユーザーのJWTを付与（RLSのINSERT/SELECT適用のため）
-    try:
-        postgrest = getattr(supabase, "postgrest", None)
-        if postgrest and hasattr(postgrest, "auth"):
-            postgrest.auth(current_user.get("access_token", ""))
-    except Exception:
-        pass
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     # 店舗の存在確認
     try:
@@ -341,10 +265,11 @@ async def create_review(
             )
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
+        logger.exception("店舗の存在確認中にエラーが発生しました")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"店舗の確認中にエラーが発生しました: {str(e)}",
+            detail="店舗の確認中にエラーが発生しました",
         )
 
     # レビューをデータベースに保存
@@ -403,8 +328,9 @@ async def create_review(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
+        logger.exception("レビューの投稿中にエラーが発生しました")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"レビューの投稿中にエラーが発生しました: {str(e)}",
+            detail="レビューの投稿に失敗しました",
         )
