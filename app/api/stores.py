@@ -7,47 +7,259 @@ with basic chain-store filtering.
 
 from __future__ import annotations
 
-from typing import List
+import logging
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from postgrest.exceptions import APIError
 from supabase import Client
 
 from app.auth import get_current_user
 from app.database import get_supabase
-from app.models.store import StoreSummary
+from app.models.store import StoreSummary, StoreDetail, PlayerRecommendation
 from app.models.review import ReviewCreate, ReviewResponse
 from app.services.google_places import search_nearby_local_stores
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stores", tags=["Stores"])
 
 
 @router.get("/nearby", response_model=List[StoreSummary])
-def get_nearby_stores(
+async def get_nearby_stores(
     lat: float = Query(..., description="Center latitude", ge=-90.0, le=90.0),
     lng: float = Query(..., description="Center longitude", ge=-180.0, le=180.0),
     radius_m: int = Query(1000, description="Search radius in meters (<= 50000)", ge=1, le=50000),
     limit: int = Query(20, description="Max number of results", ge=1, le=50),
+    supabase: Client = Depends(get_supabase),
 ) -> List[StoreSummary]:
     """Search for nearby non-chain local stores.
 
     Notes:
         - Requires ``GOOGLE_PLACES_API_KEY`` to call live Google Places.
           If missing, returns deterministic stub results for development.
-        - ``has_reviews`` and ``is_recommended`` are placeholders until DB is integrated.
+        - ``has_reviews`` and ``is_recommended`` flags are set based on DB data.
     """
 
     try:
         stores = search_nearby_local_stores(
             latitude=lat, longitude=lng, radius_m=radius_m, max_results=limit
         )
+
+        if not stores:
+            return []
+
+        # Google Place IDsを収集
+        google_place_ids = [store.google_place_id for store in stores]
+
+        # storesテーブルから該当する店舗を一括取得
+        try:
+            stores_response = (
+                supabase.table("stores")
+                .select("id, google_place_id")
+                .in_("google_place_id", google_place_ids)
+                .execute()
+            )
+
+            # google_place_id -> store_id のマッピングを作成
+            place_id_to_store_id = {}
+            store_ids = []
+            for db_store in stores_response.data or []:
+                place_id = db_store.get("google_place_id")
+                store_id = db_store.get("id")
+                if place_id and store_id:
+                    place_id_to_store_id[place_id] = store_id
+                    store_ids.append(str(store_id))
+
+            # has_reviewsとis_recommendedフラグを設定
+            has_reviews_set = set()
+            is_recommended_set = set()
+
+            if store_ids:
+                # reviewsテーブルをチェック
+                try:
+                    reviews_response = (
+                        supabase.table("reviews").select("store_id").in_("store_id", store_ids).execute()
+                    )
+                    for review in reviews_response.data or []:
+                        store_id = review.get("store_id")
+                        if store_id:
+                            has_reviews_set.add(str(store_id))
+                except (APIError, ValueError, KeyError) as e:
+                    logger.warning(f"レビュー存在チェックエラー: {e}")
+
+                # player_recommendationsテーブルをチェック
+                try:
+                    recs_response = (
+                        supabase.table("player_recommendations")
+                        .select("store_id")
+                        .in_("store_id", store_ids)
+                        .execute()
+                    )
+                    for rec in recs_response.data or []:
+                        store_id = rec.get("store_id")
+                        if store_id:
+                            is_recommended_set.add(str(store_id))
+                except (APIError, ValueError, KeyError) as e:
+                    logger.warning(f"選手おすすめ存在チェックエラー: {e}")
+
+            # 各店舗にフラグを設定
+            for store in stores:
+                store_id = place_id_to_store_id.get(store.google_place_id)
+                if store_id:
+                    store.id = store_id
+                    store.has_reviews = store_id in has_reviews_set
+                    store.is_recommended = store_id in is_recommended_set
+
+        except (APIError, ValueError, KeyError) as e:
+            # DB連携に失敗してもGoogle Places APIの結果は返す
+            logger.warning(f"DB連携エラー（stores/nearby）: {e}")
+
         return stores
     except HTTPException:
         raise
     except Exception as exc:
         # Convert any unexpected error into a 500 with a concise message.
         raise HTTPException(status_code=500, detail=f"Failed to search nearby stores: {exc}")
+
+
+@router.get("/{store_id}", response_model=StoreDetail)
+async def get_store_detail(
+    store_id: UUID,
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    特定の店舗の詳細情報を取得する
+
+    店舗の基本情報、口コミ、選手のおすすめ情報を含みます。
+
+    Args:
+        store_id: 店舗ID
+        supabase: Supabaseクライアント
+
+    Returns:
+        StoreDetail: 店舗詳細情報
+
+    Raises:
+        HTTPException: 店舗が見つからない場合（404）、データベースエラー（500）
+    """
+    # 店舗情報を取得
+    try:
+        store_response = supabase.table("stores").select("*").eq("id", str(store_id)).execute()
+        if not store_response.data or len(store_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="指定された店舗が見つかりません",
+            )
+        store = store_response.data[0]
+    except HTTPException:
+        raise
+    except (APIError, ValueError, KeyError) as e:
+        logger.error(f"店舗情報取得エラー: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="店舗情報の取得中にエラーが発生しました",
+        )
+
+    # opening_hoursをパース
+    opening_hours: Optional[List[str]] = None
+    if store.get("opening_hours"):
+        opening_hours_raw = store["opening_hours"]
+        if isinstance(opening_hours_raw, list):
+            opening_hours = opening_hours_raw
+        elif isinstance(opening_hours_raw, dict):
+            # Google Places APIの形式を想定
+            weekday_text = opening_hours_raw.get("weekday_text")
+            if isinstance(weekday_text, list):
+                opening_hours = weekday_text
+
+    # レビューを取得（profilesと結合してuser_nameを取得）
+    reviews: List[ReviewResponse] = []
+    try:
+        reviews_response = (
+            supabase.table("reviews")
+            .select("*")
+            .eq("store_id", str(store_id))
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        # user_idを一括で収集（N+1問題を回避）
+        user_ids = list(set([r.get("user_id") for r in reviews_response.data or [] if r.get("user_id")]))
+
+        # profilesを一括取得（IN句）
+        user_name_map = {}
+        if user_ids:
+            try:
+                profiles_response = (
+                    supabase.table("profiles")
+                    .select("id, nickname")
+                    .in_("id", user_ids)
+                    .execute()
+                )
+                for profile in profiles_response.data or []:
+                    user_name_map[profile["id"]] = profile.get("nickname", "匿名ユーザー")
+            except (APIError, ValueError, KeyError) as e:
+                logger.warning(f"プロフィール一括取得エラー: {e}")
+
+        # レビューリストを構築
+        for review_data in reviews_response.data or []:
+            user_id = review_data.get("user_id")
+            user_name = user_name_map.get(user_id, "匿名ユーザー")
+
+            reviews.append(
+                ReviewResponse(
+                    id=review_data["id"],
+                    store_id=review_data["store_id"],
+                    user_id=review_data["user_id"],
+                    user_name=user_name,
+                    rating=review_data["rating"],
+                    comment=review_data.get("comment", ""),
+                    created_at=review_data["created_at"],
+                )
+            )
+    except (APIError, ValueError, KeyError) as e:
+        # レビュー取得失敗時は空配列
+        logger.warning(f"レビュー取得エラー: {e}")
+        reviews = []
+
+    # 選手のおすすめ情報を取得
+    recommendations: List[PlayerRecommendation] = []
+    try:
+        rec_response = (
+            supabase.table("player_recommendations")
+            .select("*")
+            .eq("store_id", str(store_id))
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        for rec_data in rec_response.data or []:
+            recommendations.append(
+                PlayerRecommendation(
+                    id=str(rec_data["id"]),
+                    player_name=rec_data["player_name"],
+                    comment=rec_data.get("comment", ""),
+                )
+            )
+    except (APIError, ValueError, KeyError) as e:
+        # 選手おすすめ取得失敗時は空配列
+        logger.warning(f"選手おすすめ取得エラー: {e}")
+        recommendations = []
+
+    # レスポンスを構築
+    return StoreDetail(
+        id=str(store["id"]),
+        google_place_id=store["google_place_id"],
+        name=store["name"],
+        address=store.get("address", ""),
+        latitude=float(store["latitude"]),
+        longitude=float(store["longitude"]),
+        opening_hours=opening_hours,
+        reviews=reviews,
+        recommendations=recommendations,
+    )
 
 
 @router.post("/{store_id}/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)
