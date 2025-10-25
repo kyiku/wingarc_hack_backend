@@ -74,8 +74,15 @@ async def create_review(
         created_review = response.data[0]
 
         # ユーザーのニックネームを取得
-        profile_response = supabase.table("profiles").select("nickname").eq("id", user_id).execute()
-        user_name = profile_response.data[0]["nickname"] if profile_response.data else "匿名ユーザー"
+        try:
+            profile_response = supabase.table("profiles").select("nickname").eq("id", user_id).execute()
+            user_name = (
+                profile_response.data[0]["nickname"]
+                if profile_response.data and len(profile_response.data) > 0
+                else "匿名ユーザー"
+            )
+        except Exception:
+            user_name = "匿名ユーザー"
 
         # レスポンスを構築
         return ReviewResponse(

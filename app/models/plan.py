@@ -5,7 +5,7 @@
 from pydantic import BaseModel, Field
 from datetime import datetime
 from uuid import UUID
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from enum import Enum
 
 
@@ -34,7 +34,7 @@ class Waypoint(BaseModel):
     name: str
     latitude: float
     longitude: float
-    store_id: UUID | None = None
+    store_id: Optional[UUID] = None
 
 
 class RouteStep(BaseModel):
