@@ -84,6 +84,14 @@ async def generate_plan(
             detail="試合情報の取得に失敗しました",
         )
 
+    # Gemini を優先して呼び出し、未設定/失敗時は従来のダミーにフォールバック
+    try:
+        from app.services.gemini import generate_plan as _generate_with_gemini  # lazy import
+        ai_plan = _generate_with_gemini(match, request)
+        return ai_plan
+    except Exception as e:
+        logger.info("Gemini生成に失敗または未設定。ダミーへフォールバック: %s", e)
+
     # TODO: 実際にはGemini APIを呼び出してプランを生成
     # 現在はダミーデータを返却
     dummy_plan = PlanGenerateResponse(
@@ -113,7 +121,7 @@ async def generate_plan(
                 RouteStep(
                     from_="現在地",
                     to=match["venue_name"],
-                    transport=request.transport_mode,
+                    transport=request.transport_mode.value,
                     duration_minutes=30,
                 )
             ],
