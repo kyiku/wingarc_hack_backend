@@ -2,10 +2,10 @@
 旅行プラン関連のAPIエンドポイント
 """
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 import httpx
 from postgrest.exceptions import APIError
-import logging
 from supabase import Client
 from uuid import UUID
 from typing import List
@@ -17,10 +17,8 @@ from app.models.plan import (
     PlanCreate,
     PlanListResponse,
     PlanResponse,
-    Waypoint,
-    RouteStep,
-    Route,
 )
+from app.services.gemini_client import generate_travel_plan
 
 router = APIRouter(prefix="/plans", tags=["Plans"], dependencies=[Depends(ensure_rls)])
 
@@ -34,10 +32,9 @@ async def generate_plan(
     supabase: Client = Depends(get_supabase),
 ):
     """
-    試合情報と現在地を基に、AI旅行プランを生成する
+    試合情報と現在地を基に、Gemini APIを使ってAI旅行プランを生成する
 
     認証が必要なエンドポイントです。
-    ※ 現在はダミーデータを返却します。Gemini API連携は今後実装予定。
 
     Args:
         request: プラン生成リクエスト
@@ -48,7 +45,7 @@ async def generate_plan(
         PlanGenerateResponse: 生成されたプラン情報
 
     Raises:
-        HTTPException: 試合が見つからない場合（404）
+        HTTPException: 試合が見つからない場合（404）、プラン生成エラー（500）
     """
     # RLS適用はルーター依存関数 ensure_rls で共通化
 
@@ -71,56 +68,43 @@ async def generate_plan(
 
     except HTTPException:
         raise
-    except (httpx.TimeoutException, httpx.HTTPError, APIError):
-        logger.warning("試合情報の取得でHTTP/Timeoutエラー")
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"試合情報の取得でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="試合情報の取得に失敗しました",
         )
-    except Exception:
+    except Exception as e:
         logger.exception("試合情報の取得に失敗しました")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="試合情報の取得に失敗しました",
         )
 
-    # TODO: 実際にはGemini APIを呼び出してプランを生成
-    # 現在はダミーデータを返却
-    dummy_plan = PlanGenerateResponse(
-        plan_text=(
-            f"試合観戦お疲れ様！{match['opponent']}戦の観戦プランをご提案します。\n\n"
-            f"まずは現在地から{request.transport_mode}で移動して、スタジアム近くのカフェで一息つきましょう。\n"
-            f"試合開始の1時間前には{match['venue_name']}に到着することをおすすめします。\n"
-            f"試合後は地元の名店で食事を楽しみましょう！"
-        ),
-        route=Route(
-            waypoints=[
-                Waypoint(
-                    name="現在地",
-                    latitude=request.current_latitude,
-                    longitude=request.current_longitude,
-                    store_id=None,
-                ),
-                Waypoint(
-                    name=match["venue_name"],
-                    latitude=match["venue_latitude"],
-                    longitude=match["venue_longitude"],
-                    store_id=None,
-                ),
-            ],
-            total_duration_minutes=30,
-            steps=[
-                RouteStep(
-                    from_="現在地",
-                    to=match["venue_name"],
-                    transport=request.transport_mode,
-                    duration_minutes=30,
-                )
-            ],
-        ),
-    )
+    # Gemini APIを使って旅行プランを生成
+    try:
+        plan = generate_travel_plan(
+            match_info=match,
+            current_latitude=request.current_latitude,
+            current_longitude=request.current_longitude,
+            transport_mode=request.transport_mode.value,
+        )
+        logger.info(f"試合 {request.match_id} の旅行プラン生成に成功しました")
+        return plan
 
-    return dummy_plan
+    except ValueError as e:
+        # GEMINI_API_KEYが設定されていない場合
+        logger.error(f"Gemini API設定エラー: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="旅行プラン生成サービスが利用できません。管理者に連絡してください。",
+        )
+    except Exception as e:
+        logger.error(f"プラン生成エラー: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="旅行プランの生成中にエラーが発生しました",
+        )
 
 
 @router.post("", response_model=PlanResponse, status_code=status.HTTP_201_CREATED)
@@ -158,8 +142,8 @@ async def create_plan(
             )
     except HTTPException:
         raise
-    except (httpx.TimeoutException, httpx.HTTPError, APIError):
-        logger.warning("試合の存在確認でHTTP/Timeoutエラー")
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"試合の存在確認でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="試合の確認中にエラーが発生しました",
@@ -193,8 +177,8 @@ async def create_plan(
 
     except HTTPException:
         raise
-    except (httpx.TimeoutException, httpx.HTTPError, APIError):
-        logger.warning("プラン保存でHTTP/Timeoutエラー")
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"プラン保存でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="プランの保存に失敗しました",
@@ -242,8 +226,8 @@ async def get_plans(
         plans = [PlanListResponse(**plan) for plan in response.data]
         return plans
 
-    except (httpx.TimeoutException, httpx.HTTPError, APIError):
-        logger.warning("プラン一覧取得でHTTP/Timeoutエラー")
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"プラン一覧取得でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="プラン一覧の取得に失敗しました",
@@ -304,8 +288,8 @@ async def get_plan(
 
     except HTTPException:
         raise
-    except (httpx.TimeoutException, httpx.HTTPError, APIError):
-        logger.warning("プラン取得でHTTP/Timeoutエラー")
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"プラン取得でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="プランの取得に失敗しました",
