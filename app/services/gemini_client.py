@@ -69,8 +69,8 @@ def generate_travel_plan(
     )
 
     try:
-        # Gemini 1.5 Flashモデルを使用（高速かつコスト効率的）
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        # Gemini 2.5 Flashモデルを使用（高速かつコスト効率的）
+        model = genai.GenerativeModel("gemini-2.5-flash")
 
         # JSON形式でのレスポンスを要求
         generation_config = GenerationConfig(
@@ -218,14 +218,9 @@ def _parse_gemini_response(plan_data: Dict[str, Any]) -> PlanGenerateResponse:
             for wp in plan_data["route"]["waypoints"]
         ]
 
-        # stepsの変換
+        # stepsの変換（aliasに対応するため、model_validateを使用）
         steps = [
-            RouteStep(
-                from_=step["from"],
-                to=step["to"],
-                transport=step["transport"],
-                duration_minutes=int(step["duration_minutes"]),
-            )
+            RouteStep.model_validate(step)
             for step in plan_data["route"]["steps"]
         ]
 
