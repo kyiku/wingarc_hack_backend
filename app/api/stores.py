@@ -7,10 +7,12 @@ with basic chain-store filtering.
 
 from __future__ import annotations
 
+import logging
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from postgrest.exceptions import APIError
 from supabase import Client
 
 from app.auth import get_current_user
@@ -20,6 +22,7 @@ from app.models.review import ReviewCreate, ReviewResponse
 from app.services.google_places import search_nearby_local_stores
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/stores", tags=["Stores"])
 
 
@@ -83,8 +86,8 @@ async def get_nearby_stores(
                         store_id = review.get("store_id")
                         if store_id:
                             has_reviews_set.add(str(store_id))
-                except Exception:
-                    pass
+                except (APIError, ValueError, KeyError) as e:
+                    logger.warning(f"レビュー存在チェックエラー: {e}")
 
                 # player_recommendationsテーブルをチェック
                 try:
@@ -98,8 +101,8 @@ async def get_nearby_stores(
                         store_id = rec.get("store_id")
                         if store_id:
                             is_recommended_set.add(str(store_id))
-                except Exception:
-                    pass
+                except (APIError, ValueError, KeyError) as e:
+                    logger.warning(f"選手おすすめ存在チェックエラー: {e}")
 
             # 各店舗にフラグを設定
             for store in stores:
@@ -109,9 +112,9 @@ async def get_nearby_stores(
                     store.has_reviews = store_id in has_reviews_set
                     store.is_recommended = store_id in is_recommended_set
 
-        except Exception:
+        except (APIError, ValueError, KeyError) as e:
             # DB連携に失敗してもGoogle Places APIの結果は返す
-            pass
+            logger.warning(f"DB連携エラー（stores/nearby）: {e}")
 
         return stores
     except HTTPException:
@@ -152,10 +155,11 @@ async def get_store_detail(
         store = store_response.data[0]
     except HTTPException:
         raise
-    except Exception as e:
+    except (APIError, ValueError, KeyError) as e:
+        logger.error(f"店舗情報取得エラー: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"店舗情報の取得中にエラーが発生しました: {str(e)}",
+            detail="店舗情報の取得中にエラーが発生しました",
         )
 
     # opening_hoursをパース
@@ -181,20 +185,28 @@ async def get_store_detail(
             .execute()
         )
 
-        # 各レビューのuser_idからニックネームを取得
+        # user_idを一括で収集（N+1問題を回避）
+        user_ids = list(set([r.get("user_id") for r in reviews_response.data or [] if r.get("user_id")]))
+
+        # profilesを一括取得（IN句）
+        user_name_map = {}
+        if user_ids:
+            try:
+                profiles_response = (
+                    supabase.table("profiles")
+                    .select("id, nickname")
+                    .in_("id", user_ids)
+                    .execute()
+                )
+                for profile in profiles_response.data or []:
+                    user_name_map[profile["id"]] = profile.get("nickname", "匿名ユーザー")
+            except (APIError, ValueError, KeyError) as e:
+                logger.warning(f"プロフィール一括取得エラー: {e}")
+
+        # レビューリストを構築
         for review_data in reviews_response.data or []:
             user_id = review_data.get("user_id")
-            user_name = "匿名ユーザー"
-
-            if user_id:
-                try:
-                    profile_response = (
-                        supabase.table("profiles").select("nickname").eq("id", user_id).execute()
-                    )
-                    if profile_response.data and len(profile_response.data) > 0:
-                        user_name = profile_response.data[0].get("nickname", "匿名ユーザー")
-                except Exception:
-                    pass
+            user_name = user_name_map.get(user_id, "匿名ユーザー")
 
             reviews.append(
                 ReviewResponse(
@@ -207,8 +219,9 @@ async def get_store_detail(
                     created_at=review_data["created_at"],
                 )
             )
-    except Exception:
+    except (APIError, ValueError, KeyError) as e:
         # レビュー取得失敗時は空配列
+        logger.warning(f"レビュー取得エラー: {e}")
         reviews = []
 
     # 選手のおすすめ情報を取得
@@ -230,8 +243,9 @@ async def get_store_detail(
                     comment=rec_data.get("comment", ""),
                 )
             )
-    except Exception:
+    except (APIError, ValueError, KeyError) as e:
         # 選手おすすめ取得失敗時は空配列
+        logger.warning(f"選手おすすめ取得エラー: {e}")
         recommendations = []
 
     # レスポンスを構築
