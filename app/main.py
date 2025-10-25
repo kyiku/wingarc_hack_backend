@@ -42,12 +42,14 @@ from app.api.serena import router as serena_router
 from app.api.stores import router as stores_router
 from app.api.users import router as users_router
 from app.api.matches import router as matches_router
+from app.api.plans import router as plans_router
 
 api_router = APIRouter()
 api_router.include_router(serena_router)
 api_router.include_router(stores_router)
 api_router.include_router(users_router)
 api_router.include_router(matches_router)
+api_router.include_router(plans_router)
 
 app.include_router(api_router)
 

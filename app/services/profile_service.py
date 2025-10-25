@@ -88,7 +88,7 @@ def _get_profile_nickname(user_id: str) -> Optional[str]:
     client = _require_client()
     try:
         query = (
-            client.table("profiles")cc
+            client.table("profiles")
             .select("id,nickname")
             .eq("id", user_id)
             .single()
