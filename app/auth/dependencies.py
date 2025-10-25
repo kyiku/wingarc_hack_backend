@@ -2,14 +2,19 @@
 認証用の依存関数
 """
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
+import logging
+import httpx
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
 from supabase import Client
-from app.database import get_supabase
+from app.database import get_supabase, apply_user_jwt, get_supabase_client
+import os
+from supabase import create_client
 
 # HTTPBearer認証スキーム
 security = HTTPBearer()
+logger = logging.getLogger(__name__)
 
 
 async def get_current_user(
@@ -47,15 +52,24 @@ async def get_current_user(
             "id": user.id,
             "email": user.email,
             "user_metadata": user.user_metadata or {},
+            "access_token": token,
         }
 
     except HTTPException:
         raise
-    except Exception as e:
-        # Supabaseのエラーやその他の例外
+    except (httpx.TimeoutException, httpx.HTTPError):
+        logger.warning("トークン検証でHTTP/Timeoutエラー")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"トークンの検証に失敗しました: {str(e)}",
+            detail="トークンの検証に失敗しました",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception:
+        # Supabaseのエラーやその他の例外
+        logger.exception("トークン検証に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="トークンの検証に失敗しました",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -90,6 +104,46 @@ async def get_optional_user(
             "id": user.id,
             "email": user.email,
             "user_metadata": user.user_metadata or {},
+            "access_token": token,
         }
+    except (httpx.TimeoutException, httpx.HTTPError):
+        return None
     except Exception:
         return None
+
+
+async def ensure_rls(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+) -> None:
+    """
+    ルーター全体に適用できるRLS適用用の共通依存関数。
+
+    - Authorizationヘッダがある場合のみ、PostgRESTにユーザーJWTを適用する。
+    - 共有クライアントの状態汚染を避けるため、可能ならリクエストスコープのクライアントを生成し request.state に格納する。
+    - 失敗時はフェイルソフトで何もしない。
+    """
+    if not credentials:
+        return
+    token = credentials.credentials or ""
+    if not token:
+        return
+
+    # リクエストスコープの Supabase クライアントを生成してJWTを適用
+    # 失敗時は何もしない（RLS未適用のクライアントが使用される）
+    try:
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        if supabase_url and supabase_key:
+            client = create_client(supabase_url, supabase_key)
+            try:
+                postgrest = getattr(client, "postgrest", None)
+                if postgrest and hasattr(postgrest, "auth"):
+                    postgrest.auth(token)
+            except Exception:
+                pass
+            # このリクエスト内では以降このクライアントが使われる
+            request.state.supabase = client
+    except Exception:
+        # 失敗時はフェイルソフト：RLS未適用のグローバルクライアントが使用される
+        pass

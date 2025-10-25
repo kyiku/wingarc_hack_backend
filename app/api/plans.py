@@ -4,6 +4,8 @@
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
+from postgrest.exceptions import APIError
 from supabase import Client
 from uuid import UUID
 from typing import List
@@ -18,9 +20,9 @@ from app.models.plan import (
 )
 from app.services.gemini_client import generate_travel_plan
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/plans", tags=["Plans"], dependencies=[Depends(ensure_rls)])
+
+logger = logging.getLogger(__name__)
 
 
 @router.post("/generate", response_model=PlanGenerateResponse)
@@ -45,6 +47,8 @@ async def generate_plan(
     Raises:
         HTTPException: 試合が見つからない場合（404）、プラン生成エラー（500）
     """
+    # RLS適用はルーター依存関数 ensure_rls で共通化
+
     # 試合の存在確認
     try:
         match_response = (
@@ -64,11 +68,17 @@ async def generate_plan(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"試合情報取得エラー: {e}", exc_info=True)
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"試合情報の取得でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="試合情報の取得中にエラーが発生しました",
+            detail="試合情報の取得に失敗しました",
+        )
+    except Exception as e:
+        logger.exception("試合情報の取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="試合情報の取得に失敗しました",
         )
 
     # Gemini APIを使って旅行プランを生成
@@ -120,6 +130,7 @@ async def create_plan(
         HTTPException: 試合が見つからない場合（404）、データベースエラー（500）
     """
     user_id = current_user["id"]
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     # 試合の存在確認
     try:
@@ -131,8 +142,14 @@ async def create_plan(
             )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"試合の存在確認エラー: {e}", exc_info=True)
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"試合の存在確認でHTTP/Timeoutエラー: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="試合の確認中にエラーが発生しました",
+        )
+    except Exception:
+        logger.exception("試合の存在確認中にエラーが発生しました")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="試合の確認中にエラーが発生しました",
@@ -160,11 +177,17 @@ async def create_plan(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"プラン保存エラー: {e}", exc_info=True)
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"プラン保存でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="プランの保存中にエラーが発生しました",
+            detail="プランの保存に失敗しました",
+        )
+    except Exception:
+        logger.exception("プランの保存中にエラーが発生しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="プランの保存に失敗しました",
         )
 
 
@@ -189,6 +212,7 @@ async def get_plans(
         HTTPException: データベースエラー（500）
     """
     user_id = current_user["id"]
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     try:
         response = (
@@ -202,11 +226,17 @@ async def get_plans(
         plans = [PlanListResponse(**plan) for plan in response.data]
         return plans
 
-    except Exception as e:
-        logger.error(f"プラン一覧取得エラー: {e}", exc_info=True)
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"プラン一覧取得でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="プラン一覧の取得中にエラーが発生しました",
+            detail="プラン一覧の取得に失敗しました",
+        )
+    except Exception:
+        logger.exception("プラン一覧の取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="プラン一覧の取得に失敗しました",
         )
 
 
@@ -234,6 +264,7 @@ async def get_plan(
         HTTPException: プランが見つからない場合（404）、権限がない場合（403）
     """
     user_id = current_user["id"]
+    # RLS適用はルーター依存関数 ensure_rls で共通化
 
     try:
         response = supabase.table("plans").select("*").eq("id", str(plan_id)).execute()
@@ -257,9 +288,15 @@ async def get_plan(
 
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"プラン取得エラー: {e}", exc_info=True)
+    except (httpx.TimeoutException, httpx.HTTPError, APIError) as e:
+        logger.warning(f"プラン取得でHTTP/Timeoutエラー: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="プランの取得中にエラーが発生しました",
+            detail="プランの取得に失敗しました",
+        )
+    except Exception:
+        logger.exception("プランの取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="プランの取得に失敗しました",
         )
