@@ -6,12 +6,12 @@ These models shape the API responses for store endpoints.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.models.review import ReviewResponse
+if TYPE_CHECKING:
+    from app.models.review import ReviewResponse
 
 
 class StoreSummary(BaseModel):
@@ -32,32 +32,26 @@ class StoreSummary(BaseModel):
 
 
 class PlayerRecommendation(BaseModel):
-    """A player recommendation registered by club staff.
+    """選手のおすすめ情報"""
 
-    Only the fields required by the API spec are exposed.
-    """
-
-    id: str = Field(description="Recommendation UUID")
-    player_name: str = Field(description="Player name")
-    comment: str = Field(description="Recommendation comment")
+    id: str = Field(description="おすすめID (UUID)")
+    player_name: str = Field(description="選手名")
+    comment: str = Field(description="おすすめコメント")
 
     model_config = {"from_attributes": True}
 
 
 class StoreDetail(BaseModel):
-    """Detailed store information with reviews and recommendations."""
+    """店舗の詳細情報（口コミと選手おすすめ含む）"""
 
-    id: str = Field(description="Store UUID")
+    id: str = Field(description="店舗ID (UUID)")
     google_place_id: str = Field(description="Google Places place_id")
-    name: str = Field(description="Store display name")
-    address: str = Field(description="Postal address")
-    latitude: float = Field(description="Latitude in WGS84")
-    longitude: float = Field(description="Longitude in WGS84")
-    opening_hours: Optional[List[str]] = Field(default=None, description="Human-friendly opening hours")
-    reviews: List[ReviewResponse] = Field(default_factory=list, description="User reviews for the store")
-    recommendations: List[PlayerRecommendation] = Field(
-        default_factory=list, description="Player recommendations for this store"
-    )
+    name: str = Field(description="店舗名")
+    address: str = Field(description="住所")
+    latitude: float = Field(description="緯度 (WGS84)")
+    longitude: float = Field(description="経度 (WGS84)")
+    opening_hours: Optional[List[str]] = Field(default=None, description="営業時間（文字列配列）")
+    reviews: List["ReviewResponse"] = Field(default_factory=list, description="口コミ一覧")
+    recommendations: List[PlayerRecommendation] = Field(default_factory=list, description="選手のおすすめ一覧")
 
     model_config = {"from_attributes": True}
-

@@ -26,9 +26,8 @@ from app.models.db_rows import StoreIdMapRow, StoreIdOnlyRow
 from app.services.review_service import list_reviews_with_usernames
 
 
-router = APIRouter(prefix="/stores", tags=["Stores"], dependencies=[Depends(ensure_rls)])
-
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/stores", tags=["Stores"], dependencies=[Depends(ensure_rls)])
 
 
 @router.get("/nearby", response_model=List[StoreSummary])
