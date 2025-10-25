@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
+from app.api import users_router, stores_router, plans_router, matches_router
 
 # 環境変数を読み込み
 load_dotenv()
@@ -35,23 +36,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ルータのインクルード
-from app.api import __init__ as _api_init  # noqa: F401  # 明示的にパッケージを解決
-from fastapi import APIRouter
-from app.api.serena import router as serena_router
-from app.api.stores import router as stores_router
-from app.api.users import router as users_router
-from app.api.matches import router as matches_router
-from app.api.plans import router as plans_router
-
-api_router = APIRouter()
-api_router.include_router(serena_router)
-api_router.include_router(stores_router)
-api_router.include_router(users_router)
-api_router.include_router(matches_router)
-api_router.include_router(plans_router)
-
-app.include_router(api_router)
+# APIルーターの登録
+app.include_router(users_router)
+app.include_router(stores_router)
+app.include_router(plans_router)
+app.include_router(matches_router)
 
 
 @app.get("/health", tags=["Health"])

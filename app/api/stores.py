@@ -1,5 +1,5 @@
 """
-Stores API endpoints.
+店舗・レビュー関連のAPIエンドポイント
 
 Currently provides a nearby local stores search using Google Places
 with basic chain-store filtering.
@@ -89,7 +89,7 @@ async def create_review(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"店舗の確認に失敗しました: {str(e)}",
+            detail=f"店舗の確認中にエラーが発生しました: {str(e)}",
         )
 
     # レビューをデータベースに保存
@@ -106,7 +106,7 @@ async def create_review(
         if not response.data or len(response.data) == 0:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="レビューの保存に失敗しました",
+                detail="レビューの作成に失敗しました",
             )
 
         created_review = response.data[0]
@@ -122,6 +122,7 @@ async def create_review(
         except Exception:
             user_name = "匿名ユーザー"
 
+        # レスポンスを構築
         return ReviewResponse(
             id=created_review["id"],
             store_id=created_review["store_id"],
@@ -137,6 +138,5 @@ async def create_review(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"レビューの保存に失敗しました: {str(e)}",
+            detail=f"レビューの投稿中にエラーが発生しました: {str(e)}",
         )
-
