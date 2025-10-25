@@ -12,6 +12,8 @@ from .plan import (
     PlanResponse,
     TransportMode,
 )
+from .match import MatchResponse
+from .store import StoreSummary
 
 __all__ = [
     "ProfileResponse",
@@ -25,4 +27,6 @@ __all__ = [
     "PlanListResponse",
     "PlanResponse",
     "TransportMode",
+    "MatchResponse",
+    "StoreSummary",
 ]

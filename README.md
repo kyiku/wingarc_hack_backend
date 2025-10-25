@@ -152,6 +152,8 @@ supabase db push
 
 ### 7. アプリケーションの起動
 
+#### A. 標準の起動（既存のvenv使用）
+
 ```bash
 # 開発モード（ホットリロード有効）
 python app/main.py
@@ -161,6 +163,41 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 APIは `http://localhost:8000` で起動します。
+
+#### B. uvを使った起動（お好みで）
+
+uv を使うと、依存解決と実行を簡潔に行えます。既存の `venv` を使う方法と、uv 管理の仮想環境を使う方法の2通りがあります。
+
+- 既存の `venv` を使って実行（依存は `pip install -r requirements.txt` 済みを想定）
+
+  - Windows:
+    ```bash
+    uv run --python venv/Scripts/python.exe app/main.py
+    ```
+
+  - macOS/Linux:
+    ```bash
+    uv run --python venv/bin/python app/main.py
+    ```
+
+- uv 管理の仮想環境で実行（venv 未作成でも可）
+
+  ```bash
+  # 必要に応じて環境を作成
+  uv venv
+  # requirements を同期
+  uv pip sync -r requirements.txt
+  # 実行（ホットリロード含むエントリポイントは app/main.py）
+  uv run app/main.py
+  ```
+
+  直接 uvicorn を使いたい場合は以下でもOKです：
+
+  ```bash
+  uv run -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+  ```
+
+ポートは `.env` の `PORT`（未設定時は 8000）を使用します。
 
 ### 8. APIドキュメントの確認
 

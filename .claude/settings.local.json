@@ -1,7 +1,31 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh issue create:*)"
+      "Bash(gh issue create:*)",
+      "Bash(gh issue view:*)",
+      "Bash(supabase init:*)",
+      "Bash(supabase link:*)",
+      "Bash(supabase db push:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(supabase db remote:*)",
+      "Bash(supabase inspect:*)",
+      "Bash(supabase db diff:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr list:*)",
+      "Bash(git pull:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checkout:*)",
+      "Bash(git rm:*)",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)"
     ],
     "deny": [],
     "ask": []
