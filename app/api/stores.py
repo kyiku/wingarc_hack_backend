@@ -107,9 +107,9 @@ def get_nearby_stores(
             return stores
     except HTTPException:
         raise
-    except Exception as exc:
-        # Convert any unexpected error into a 500 with a concise message.
-        raise HTTPException(status_code=500, detail=f"Failed to search nearby stores: {exc}")
+    except Exception:
+        # 予期しないエラーは詳細を伏せて500を返す（メッセージは日本語で統一）
+        raise HTTPException(status_code=500, detail="近隣店舗の検索に失敗しました")
 
 
 @router.get("/{store_id}", response_model=StoreDetail)
@@ -129,10 +129,12 @@ async def get_store_detail(
 
     # 1) 店舗の基本情報
     try:
-        store_resp = supabase.table("stores").select("*").eq("id", str(store_id)).execute()
+        store_resp = (
+            supabase.table("stores").select("*").eq("id", str(store_id)).single().execute()
+        )
         if not store_resp.data:
             raise HTTPException(status_code=404, detail="指定された店舗が見つかりません")
-        store = store_resp.data[0]
+        store = store_resp.data
     except HTTPException:
         raise
     except Exception as exc:
@@ -163,46 +165,98 @@ async def get_store_detail(
         opening_hours = None
 
     # 2) レビュー一覧の取得（ユーザー名解決を含む）
+    # 最適化: PostgREST のリレーション埋め込みで 1 クエリ化を試み、
+    # 失敗時は IN 句による2段階解決にフォールバックする。
     reviews: List[ReviewResponse] = []
     try:
-        rev_resp = (
-            supabase.table("reviews")
-            .select("id, store_id, user_id, rating, comment, created_at")
-            .eq("store_id", str(store_id))
-            .order("created_at", desc=True)
-            .execute()
-        )
-
-        for row in rev_resp.data or []:
-            user_id = row.get("user_id")
-            user_name = "匿名ユーザー"
-            try:
-                prof_resp = (
-                    supabase.table("profiles").select("nickname").eq("id", user_id).execute()
+        try:
+            # 埋め込み: reviews ←(FK: user_id)→ profiles(nickname)
+            rev_resp = (
+                supabase.table("reviews")
+                .select(
+                    "id, store_id, user_id, rating, comment, created_at, profiles(nickname)"
                 )
-                if prof_resp.data and len(prof_resp.data) > 0:
-                    nickname = prof_resp.data[0].get("nickname")
-                    if isinstance(nickname, str) and nickname:
-                        user_name = nickname
-            except Exception:
-                user_name = "匿名ユーザー"
+                .eq("store_id", str(store_id))
+                .order("created_at", desc=True)
+                .execute()
+            )
 
-            try:
-                reviews.append(
-                    ReviewResponse(
-                        id=row.get("id"),
-                        store_id=row.get("store_id"),
-                        user_id=row.get("user_id"),
-                        user_name=user_name,
-                        rating=row.get("rating"),
-                        comment=row.get("comment"),
-                        created_at=row.get("created_at"),
+            rows = getattr(rev_resp, "data", None) or []
+            for row in rows:
+                try:
+                    profile = row.get("profiles")
+                    nickname: Optional[str] = None
+                    if isinstance(profile, dict):
+                        nickname = profile.get("nickname")
+                    elif isinstance(profile, list) and profile:
+                        first = profile[0]
+                        if isinstance(first, dict):
+                            nickname = first.get("nickname")
+                    user_name = nickname if isinstance(nickname, str) and nickname else "匿名ユーザー"
+                    reviews.append(
+                        ReviewResponse(
+                            id=row.get("id"),
+                            store_id=row.get("store_id"),
+                            user_id=row.get("user_id"),
+                            user_name=user_name,
+                            rating=row.get("rating"),
+                            comment=row.get("comment"),
+                            created_at=row.get("created_at"),
+                        )
                     )
-                )
-            except Exception:
-                # 型不一致などでスキップ
-                continue
-    except Exception as exc:
+                except Exception:
+                    # 型不一致などでスキップ
+                    continue
+        except Exception:
+            # フォールバック: reviews を取得 → user_id をまとめて抽出 → profiles を IN 句で一括取得
+            rev_resp = (
+                supabase.table("reviews")
+                .select("id, store_id, user_id, rating, comment, created_at")
+                .eq("store_id", str(store_id))
+                .order("created_at", desc=True)
+                .execute()
+            )
+
+            rows = rev_resp.data or []
+            user_ids = [str(r.get("user_id")) for r in rows if r.get("user_id")]
+            unique_user_ids = sorted(set(user_ids))
+
+            nickname_map: Dict[str, str] = {}
+            if unique_user_ids:
+                try:
+                    prof_resp = (
+                        supabase.table("profiles")
+                        .select("id, nickname")
+                        .in_("id", unique_user_ids)
+                        .execute()
+                    )
+                    for pr in getattr(prof_resp, "data", None) or []:
+                        uid = pr.get("id")
+                        nk = pr.get("nickname")
+                        if uid and isinstance(uid, str):
+                            if isinstance(nk, str) and nk:
+                                nickname_map[str(uid)] = nk
+                except Exception:
+                    nickname_map = {}
+
+            for row in rows:
+                try:
+                    uid = row.get("user_id")
+                    user_name = nickname_map.get(str(uid), "匿名ユーザー")
+                    reviews.append(
+                        ReviewResponse(
+                            id=row.get("id"),
+                            store_id=row.get("store_id"),
+                            user_id=uid,
+                            user_name=user_name,
+                            rating=row.get("rating"),
+                            comment=row.get("comment"),
+                            created_at=row.get("created_at"),
+                        )
+                    )
+                except Exception:
+                    continue
+    except Exception:
         # レビューは取得失敗しても全体を落とさず、空配列で返す
         reviews = []
 
@@ -312,14 +366,27 @@ async def create_review(
 
         created_review = response.data[0]
 
-        # ユーザーのニックネームを取得
+        # レビューと併せて profiles(nickname) を埋め込みで取得（追加の profiles 単独クエリを回避）
         try:
-            profile_response = supabase.table("profiles").select("nickname").eq("id", user_id).execute()
-            user_name = (
-                profile_response.data[0]["nickname"]
-                if profile_response.data and len(profile_response.data) > 0
-                else "匿名ユーザー"
+            rev_with_profile = (
+                supabase.table("reviews")
+                .select(
+                    "id, store_id, user_id, rating, comment, created_at, profiles(nickname)"
+                )
+                .eq("id", created_review["id"])
+                .single()
+                .execute()
             )
+            row = getattr(rev_with_profile, "data", None) or {}
+            profile = row.get("profiles")
+            nickname = None
+            if isinstance(profile, dict):
+                nickname = profile.get("nickname")
+            elif isinstance(profile, list) and profile:
+                first = profile[0]
+                if isinstance(first, dict):
+                    nickname = first.get("nickname")
+            user_name = nickname if isinstance(nickname, str) and nickname else "匿名ユーザー"
         except Exception:
             user_name = "匿名ユーザー"
 
