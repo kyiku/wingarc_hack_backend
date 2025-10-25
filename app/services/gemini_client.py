@@ -9,6 +9,7 @@ import logging
 import json
 from typing import Optional, Dict, Any
 
+from dotenv import load_dotenv
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig
 
@@ -18,6 +19,9 @@ from app.models.plan import (
     Waypoint,
     RouteStep,
 )
+
+# 環境変数を読み込み
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
