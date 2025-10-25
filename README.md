@@ -71,7 +71,84 @@ GEMINI_API_KEY=your_gemini_api_key
 
 ### 6. Supabaseデータベースのセットアップ
 
-`DB_specification`ファイルに記載されているスキーマに従って、Supabaseでテーブルを作成してください。
+Supabase CLIを使ってデータベーススキーマを作成します。
+
+#### 前提条件
+
+Supabase CLIがインストールされていること（まだの場合）:
+
+```bash
+# macOS / Linux
+brew install supabase/tap/supabase
+
+# npm経由
+npm install -g supabase
+```
+
+#### 手順
+
+**プロジェクトは既にリンク済みです。**以下のコマンドでマイグレーションをプッシュできます：
+
+```bash
+# マイグレーションをリモートデータベースに適用
+supabase db push
+```
+
+**新しい開発者がセットアップする場合**:
+
+```bash
+# 1. リモートプロジェクトにリンク
+supabase link --project-ref qkduynbjhdyjfyzttmeq
+
+# 2. マイグレーションを適用
+supabase db push
+```
+
+#### テーブル作成の確認
+
+以下のテーブルが作成されます：
+- `profiles` - ユーザープロフィール
+- `matches` - 試合情報
+- `stores` - 店舗情報
+- `chain_stores` - チェーン店リスト
+- `reviews` - 口コミ
+- `player_recommendations` - 選手のおすすめ
+- `plans` - 保存したプラン
+
+確認方法：
+```bash
+# データベース状態を確認
+supabase db diff
+
+# または、Supabaseダッシュボードで確認
+# https://supabase.com/dashboard/project/qkduynbjhdyjfyzttmeq
+```
+
+#### マイグレーションに含まれる設定
+
+- **外部キー制約**: テーブル間のリレーションシップを保証
+- **CHECK制約**: reviews.ratingを1〜5に制限
+- **UNIQUE制約**: stores.google_place_id、chain_stores.nameの重複を防止
+- **Row Level Security (RLS)**: テーブルごとのアクセス制御
+  - profiles: ユーザー自身のみ閲覧・更新可能
+  - reviews: 認証済みユーザーのみ投稿可能
+  - plans: ユーザー自身のプランのみ閲覧・作成可能
+- **インデックス**: 緯度経度検索、日時ソートなどのパフォーマンス最適化
+- **トリガー**:
+  - 新規ユーザー登録時に自動的にprofilesレコードを作成
+  - profiles.updated_atの自動更新
+
+#### 新しいマイグレーションの作成
+
+今後、スキーマを変更する場合:
+
+```bash
+# 新しいマイグレーションファイルを作成
+supabase migration new your_migration_name
+
+# マイグレーションを適用
+supabase db push
+```
 
 ### 7. アプリケーションの起動
 
@@ -116,14 +193,18 @@ backend/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py              # FastAPIアプリケーションのエントリーポイント
-│   ├── api/                 # APIエンドポイント
+│   ├── api/                 # APIエンドポイント（今後実装）
 │   │   └── __init__.py
-│   ├── models/              # Pydanticモデル
+│   ├── models/              # Pydanticモデル（今後実装）
 │   │   └── __init__.py
-│   ├── services/            # 外部API連携サービス
+│   ├── services/            # 外部API連携サービス（今後実装）
 │   │   └── __init__.py
-│   └── database/            # データベース接続とクエリ
+│   └── database/            # データベース接続とクエリ（今後実装）
 │       └── __init__.py
+├── supabase/                # Supabase CLI設定
+│   ├── config.toml         # Supabase設定ファイル
+│   └── migrations/         # データベースマイグレーション
+│       └── 20241025000000_initial_schema.sql  # 初期スキーマ
 ├── requirements.txt         # 依存パッケージ
 ├── .env.example            # 環境変数テンプレート
 ├── .env                    # 環境変数（gitignore対象）
