@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
+from app.api import users_router
 
 # 環境変数を読み込み
 load_dotenv()
@@ -34,6 +35,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# APIルーターの登録
+app.include_router(users_router)
 
 
 @app.get("/health", tags=["Health"])
