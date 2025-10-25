@@ -55,4 +55,3 @@ class StoreDetail(BaseModel):
     recommendations: List[PlayerRecommendation] = Field(default_factory=list, description="選手のおすすめ一覧")
 
     model_config = {"from_attributes": True}
-

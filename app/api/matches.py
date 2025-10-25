@@ -9,12 +9,16 @@ from typing import List, Optional, Literal
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+import httpx
+from postgrest.exceptions import APIError
+import logging
 
 from app.models.match import MatchResponse
 from app.services.match_service import list_matches
 
 
 router = APIRouter(prefix="/matches", tags=["Matches"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=List[MatchResponse])
@@ -43,5 +47,9 @@ def get_matches(
 
     try:
         return list_matches(start=from_, end=to)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch matches: {exc}")
+    except (httpx.TimeoutException, httpx.HTTPError, APIError):
+        logger.warning("試合一覧取得でHTTP/Timeoutエラー")
+        raise HTTPException(status_code=500, detail="試合情報の取得に失敗しました")
+    except Exception:
+        logger.exception("試合情報の取得に失敗しました")
+        raise HTTPException(status_code=500, detail="試合情報の取得に失敗しました")
