@@ -2,9 +2,9 @@
 Supabaseクライアントの設定と初期化
 
 方針:
-- 原則としてリクエストスコープのクライアント（request.state.supabase）を使用。
-- 上記がない場合のみ新しいクライアントを生成して返す（グローバルなシングルトンは保持しない）。
-  RLSのJWT適用は状態を持つため、共有インスタンスの使い回しは避ける。
+- グローバルなシングルトンクライアントを保持（接続プール効率化）
+- リクエストスコープのクライアント（request.state.supabase）を優先使用
+- RLS適用は常にリクエストスコープのクライアントで実行
 """
 
 import os
@@ -12,10 +12,16 @@ from typing import Optional
 from fastapi import Request
 from supabase import create_client, Client
 
+# グローバルなシングルトンクライアント（RLS未適用の基本クライアント）
+_global_client: Optional[Client] = None
+
 
 def get_supabase_client() -> Client:
     """
     Supabaseクライアントのシングルトンインスタンスを取得
+
+    注意: このクライアントにはRLSが適用されていません。
+    認証が必要な操作では、request.state.supabaseを使用してください。
 
     Returns:
         Client: Supabaseクライアント
@@ -23,6 +29,11 @@ def get_supabase_client() -> Client:
     Raises:
         ValueError: 環境変数が設定されていない場合
     """
+    global _global_client
+
+    if _global_client is not None:
+        return _global_client
+
     supabase_url = os.getenv("SUPABASE_URL")
     supabase_key = os.getenv("SUPABASE_KEY")
 
@@ -31,7 +42,8 @@ def get_supabase_client() -> Client:
     if not supabase_key:
         raise ValueError("SUPABASE_KEYが設定されていません")
 
-    return create_client(supabase_url, supabase_key)
+    _global_client = create_client(supabase_url, supabase_key)
+    return _global_client
 
 
 def get_supabase(request: Optional[Request] = None) -> Client:

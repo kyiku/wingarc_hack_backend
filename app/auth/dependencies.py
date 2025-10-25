@@ -129,7 +129,8 @@ async def ensure_rls(
     if not token:
         return
 
-    # 1) リクエストスコープの Supabase クライアントを生成してJWTを適用
+    # リクエストスコープの Supabase クライアントを生成してJWTを適用
+    # 失敗時は何もしない（RLS未適用のクライアントが使用される）
     try:
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
@@ -143,15 +144,6 @@ async def ensure_rls(
                 pass
             # このリクエスト内では以降このクライアントが使われる
             request.state.supabase = client
-            return
     except Exception:
-        pass
-
-    # 2) フォールバック: 共有クライアントに対してJWT適用（副作用あり／低推奨）
-    try:
-        shared = get_supabase_client()
-        apply_user_jwt(shared, token)
-        # 以降の依存解決でこのクライアントを使うようにする
-        request.state.supabase = shared
-    except Exception:
+        # 失敗時はフェイルソフト：RLS未適用のグローバルクライアントが使用される
         pass

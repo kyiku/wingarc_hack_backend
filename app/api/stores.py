@@ -7,15 +7,14 @@ with basic chain-store filtering.
 
 from __future__ import annotations
 
-from typing import List, Optional, Dict, Set
 import logging
-import httpx
-import httpx
+from typing import List, Optional, Dict, Set
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from supabase import Client
 from postgrest.exceptions import APIError
+from supabase import Client
 
 from app.auth import get_current_user, ensure_rls
 from app.database import get_supabase
@@ -201,13 +200,8 @@ async def get_store_detail(
         )
         for row in rec_resp.data or []:
             try:
-                recommendations.append(
-                    PlayerRecommendation(
-                        id=str(row.get("id")),
-                        player_name=str(row.get("player_name")),
-                        comment=str(row.get("comment")),
-                    )
-                )
+                # Pydanticのmodel_validateで型安全に変換
+                recommendations.append(PlayerRecommendation.model_validate(row))
             except (TypeError, ValueError, KeyError, AttributeError):
                 continue
     except Exception:
