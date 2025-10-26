@@ -36,10 +36,11 @@ else:
     logger.warning("環境変数 GEMINI_API_KEY が見つかりません")
 
 # ミクニワールドスタジアム北九州の正確な座標
-# 住所: 福岡県北九州市八幡西区本城3-1-1
+# 住所: 〒802-0001 福岡県北九州市小倉北区浅野3-9-33
+# 出典: Mapcarta, StadiumDB
 MIKUNI_WORLD_STADIUM_COORDS = {
-    "latitude": 33.8626,
-    "longitude": 130.7741,
+    "latitude": 33.89112,
+    "longitude": 130.88873,
 }
 
 
