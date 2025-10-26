@@ -35,6 +35,13 @@ if GEMINI_API_KEY:
 else:
     logger.warning("環境変数 GEMINI_API_KEY が見つかりません")
 
+# ミクニワールドスタジアム北九州の正確な座標
+# 住所: 福岡県北九州市八幡西区本城3-1-1
+MIKUNI_WORLD_STADIUM_COORDS = {
+    "latitude": 33.8626,
+    "longitude": 130.7741,
+}
+
 
 def generate_travel_plan(
     match_info: Dict[str, Any],
@@ -208,6 +215,16 @@ def _build_prompt(
         "bicycling": "自転車",
     }.get(transport_mode, transport_mode)
 
+    # ミクニワールドスタジアム北九州の場合は正確な座標を使用
+    venue_latitude = match_info.get("venue_latitude")
+    venue_longitude = match_info.get("venue_longitude")
+    venue_name = match_info.get("venue_name", "")
+
+    if "ミクニ" in venue_name or "本城" in venue_name:
+        logger.info(f"ミクニワールドスタジアム北九州を検出: 正確な座標を使用します")
+        venue_latitude = MIKUNI_WORLD_STADIUM_COORDS["latitude"]
+        venue_longitude = MIKUNI_WORLD_STADIUM_COORDS["longitude"]
+
     # 店舗リストをプロンプト用に整形
     stores_info = ""
     if nearby_stores and len(nearby_stores) > 0:
@@ -228,8 +245,8 @@ def _build_prompt(
 
 # 試合情報
 - 対戦相手: {match_info.get('opponent')}
-- 会場: {match_info.get('venue_name')}
-- 会場の位置: 緯度 {match_info.get('venue_latitude')}, 経度 {match_info.get('venue_longitude')}
+- 会場: {venue_name}
+- 会場の位置: 緯度 {venue_latitude}, 経度 {venue_longitude}
 
 # 現在地
 - 緯度: {current_latitude}
@@ -265,9 +282,9 @@ def _build_prompt(
         "store_id": null
       }},
       {{
-        "name": "{match_info.get('venue_name')}",
-        "latitude": {match_info.get('venue_latitude')},
-        "longitude": {match_info.get('venue_longitude')},
+        "name": "{venue_name}",
+        "latitude": {venue_latitude},
+        "longitude": {venue_longitude},
         "store_id": null
       }}
     ],
@@ -281,7 +298,7 @@ def _build_prompt(
       }},
       {{
         "from": "おすすめスポット名",
-        "to": "{match_info.get('venue_name')}",
+        "to": "{venue_name}",
         "transport": "{transport_mode}",
         "duration_minutes": 所要時間（分）
       }}

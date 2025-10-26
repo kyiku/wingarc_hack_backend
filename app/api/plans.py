@@ -20,7 +20,11 @@ from app.models.plan import (
     PlanListResponse,
     PlanResponse,
 )
-from app.services.gemini_client import generate_travel_plan, generate_travel_plan_stream
+from app.services.gemini_client import (
+    generate_travel_plan,
+    generate_travel_plan_stream,
+    MIKUNI_WORLD_STADIUM_COORDS,
+)
 from app.services.google_places import search_nearby_local_stores
 
 router = APIRouter(prefix="/plans", tags=["Plans"], dependencies=[Depends(ensure_rls)])
@@ -177,12 +181,25 @@ async def generate_plan(
         )
 
     # 会場周辺の実店舗を検索（Google Places API）
+    # ミクニワールドスタジアム北九州の場合は正確な座標を使用
+    venue_name = match.get("venue_name", "")
+    venue_lat = match["venue_latitude"]
+    venue_lng = match["venue_longitude"]
+
+    if "ミクニ" in venue_name or "本城" in venue_name:
+        logger.info(f"ミクニワールドスタジアム北九州を検出: 正確な座標で店舗検索します")
+        venue_lat = MIKUNI_WORLD_STADIUM_COORDS["latitude"]
+        venue_lng = MIKUNI_WORLD_STADIUM_COORDS["longitude"]
+        # matchデータも更新（Gemini用）
+        match["venue_latitude"] = venue_lat
+        match["venue_longitude"] = venue_lng
+
     nearby_stores = []
     try:
         # 会場から半径3km以内の店舗を検索
         stores = search_nearby_local_stores(
-            latitude=match["venue_latitude"],
-            longitude=match["venue_longitude"],
+            latitude=venue_lat,
+            longitude=venue_lng,
             radius_m=3000,
             max_results=15,
         )
@@ -288,12 +305,25 @@ async def generate_plan_stream(
         )
 
     # 会場周辺の実店舗を検索（Google Places API）
+    # ミクニワールドスタジアム北九州の場合は正確な座標を使用
+    venue_name = match.get("venue_name", "")
+    venue_lat = match["venue_latitude"]
+    venue_lng = match["venue_longitude"]
+
+    if "ミクニ" in venue_name or "本城" in venue_name:
+        logger.info(f"ミクニワールドスタジアム北九州を検出: 正確な座標で店舗検索します（ストリーミング）")
+        venue_lat = MIKUNI_WORLD_STADIUM_COORDS["latitude"]
+        venue_lng = MIKUNI_WORLD_STADIUM_COORDS["longitude"]
+        # matchデータも更新（Gemini用）
+        match["venue_latitude"] = venue_lat
+        match["venue_longitude"] = venue_lng
+
     nearby_stores = []
     try:
         # 会場から半径3km以内の店舗を検索
         stores = search_nearby_local_stores(
-            latitude=match["venue_latitude"],
-            longitude=match["venue_longitude"],
+            latitude=venue_lat,
+            longitude=venue_lng,
             radius_m=3000,
             max_results=15,
         )
