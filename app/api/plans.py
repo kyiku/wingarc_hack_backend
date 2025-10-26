@@ -21,6 +21,7 @@ from app.models.plan import (
     PlanResponse,
 )
 from app.services.gemini_client import generate_travel_plan, generate_travel_plan_stream
+from app.services.google_places import search_nearby_local_stores
 
 router = APIRouter(prefix="/plans", tags=["Plans"], dependencies=[Depends(ensure_rls)])
 
@@ -175,6 +176,31 @@ async def generate_plan(
             detail="試合情報の取得に失敗しました",
         )
 
+    # 会場周辺の実店舗を検索（Google Places API）
+    nearby_stores = []
+    try:
+        # 会場から半径3km以内の店舗を検索
+        stores = search_nearby_local_stores(
+            latitude=match["venue_latitude"],
+            longitude=match["venue_longitude"],
+            radius_m=3000,
+            max_results=15,
+        )
+        # StoreSummaryオブジェクトを辞書に変換
+        nearby_stores = [
+            {
+                "name": store.name,
+                "latitude": store.latitude,
+                "longitude": store.longitude,
+                "types": store.types or [],
+                "rating": store.rating,
+            }
+            for store in stores
+        ]
+        logger.info(f"会場周辺の店舗を{len(nearby_stores)}件取得しました")
+    except Exception as e:
+        logger.warning(f"周辺店舗の取得に失敗（Geminiは架空の店舗を生成します）: {e}")
+
     # Gemini APIを使って旅行プランを生成
     try:
         plan = generate_travel_plan(
@@ -182,6 +208,7 @@ async def generate_plan(
             current_latitude=request.current_latitude,
             current_longitude=request.current_longitude,
             transport_mode=request.transport_mode.value,
+            nearby_stores=nearby_stores if nearby_stores else None,
         )
 
         # waypointsに店舗IDを付与（店舗名や座標からstoresテーブルを検索）
@@ -260,6 +287,31 @@ async def generate_plan_stream(
             detail="試合情報の取得に失敗しました",
         )
 
+    # 会場周辺の実店舗を検索（Google Places API）
+    nearby_stores = []
+    try:
+        # 会場から半径3km以内の店舗を検索
+        stores = search_nearby_local_stores(
+            latitude=match["venue_latitude"],
+            longitude=match["venue_longitude"],
+            radius_m=3000,
+            max_results=15,
+        )
+        # StoreSummaryオブジェクトを辞書に変換
+        nearby_stores = [
+            {
+                "name": store.name,
+                "latitude": store.latitude,
+                "longitude": store.longitude,
+                "types": store.types or [],
+                "rating": store.rating,
+            }
+            for store in stores
+        ]
+        logger.info(f"会場周辺の店舗を{len(nearby_stores)}件取得しました（ストリーミング）")
+    except Exception as e:
+        logger.warning(f"周辺店舗の取得に失敗（Geminiは架空の店舗を生成します）: {e}")
+
     # ストリーミング生成関数
     async def event_generator():
         """Server-Sent Events形式でストリーミングデータを生成"""
@@ -270,6 +322,7 @@ async def generate_plan_stream(
                 current_latitude=request.current_latitude,
                 current_longitude=request.current_longitude,
                 transport_mode=request.transport_mode.value,
+                nearby_stores=nearby_stores if nearby_stores else None,
             ):
                 # SSE形式: data: {chunk}\n\n
                 yield f"data: {json.dumps({'chunk': chunk})}\n\n"

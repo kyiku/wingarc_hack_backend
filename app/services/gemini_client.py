@@ -41,6 +41,7 @@ def generate_travel_plan(
     current_latitude: float,
     current_longitude: float,
     transport_mode: str,
+    nearby_stores: Optional[list] = None,
 ) -> PlanGenerateResponse:
     """
     Gemini APIを使用して旅行プランを生成する
@@ -50,6 +51,7 @@ def generate_travel_plan(
         current_latitude: 現在地の緯度
         current_longitude: 現在地の経度
         transport_mode: 移動手段（drive, walking, transit, bicycling）
+        nearby_stores: 周辺の実店舗リスト（Google Places APIから取得）
 
     Returns:
         PlanGenerateResponse: 生成された旅行プラン
@@ -67,6 +69,7 @@ def generate_travel_plan(
         current_latitude=current_latitude,
         current_longitude=current_longitude,
         transport_mode=transport_mode,
+        nearby_stores=nearby_stores,
     )
 
     try:
@@ -106,6 +109,7 @@ def generate_travel_plan_stream(
     current_latitude: float,
     current_longitude: float,
     transport_mode: str,
+    nearby_stores: Optional[list] = None,
 ):
     """
     Gemini APIを使用してストリーミング形式で旅行プランを生成する
@@ -115,6 +119,7 @@ def generate_travel_plan_stream(
         current_latitude: 現在地の緯度
         current_longitude: 現在地の経度
         transport_mode: 移動手段（drive, walking, transit, bicycling）
+        nearby_stores: 周辺の実店舗リスト（Google Places APIから取得）
 
     Yields:
         str: ストリーミングで返される部分的なJSON文字列
@@ -132,6 +137,7 @@ def generate_travel_plan_stream(
         current_latitude=current_latitude,
         current_longitude=current_longitude,
         transport_mode=transport_mode,
+        nearby_stores=nearby_stores,
     )
 
     try:
@@ -180,6 +186,7 @@ def _build_prompt(
     current_latitude: float,
     current_longitude: float,
     transport_mode: str,
+    nearby_stores: Optional[list] = None,
 ) -> str:
     """
     Gemini APIに送信するプロンプトを構築する
@@ -189,6 +196,7 @@ def _build_prompt(
         current_latitude: 現在地の緯度
         current_longitude: 現在地の経度
         transport_mode: 移動手段
+        nearby_stores: 周辺の実店舗リスト
 
     Returns:
         str: 構築されたプロンプト
@@ -200,11 +208,23 @@ def _build_prompt(
         "bicycling": "自転車",
     }.get(transport_mode, transport_mode)
 
+    # 店舗リストをプロンプト用に整形
+    stores_info = ""
+    if nearby_stores and len(nearby_stores) > 0:
+        stores_info = "\n# 会場周辺の実在する店舗リスト\n以下は実際に存在する店舗です。**必ずこのリストから2〜3箇所選んで**プランに含めてください：\n\n"
+        for i, store in enumerate(nearby_stores[:10], 1):  # 上位10件まで
+            stores_info += f"{i}. **{store.get('name', 'N/A')}**\n"
+            stores_info += f"   - カテゴリ: {', '.join(store.get('types', [])[:2])}\n"
+            stores_info += f"   - 緯度: {store.get('latitude')}\n"
+            stores_info += f"   - 経度: {store.get('longitude')}\n"
+            if store.get('rating'):
+                stores_info += f"   - 評価: {store.get('rating')} ⭐\n"
+            stores_info += "\n"
+        stores_info += "**重要**: プランに含める店舗は、必ず上記リストから選び、リストに記載された正確な緯度・経度を使用してください。\n"
+
     prompt = f"""
 あなたはギラヴァンツ北九州のサポーター向けに、試合観戦の旅行プランを提案するアシスタントです。
 以下の情報をもとに、**魅力的で詳細な**試合観戦プランを日本語で提案してください。
-会場の位置や、現在地の位置（緯度、経度）を必ず正しいものを返すこと。
-また、旅行プランにチェーン店は含めないこと。
 
 # 試合情報
 - 対戦相手: {match_info.get('opponent')}
@@ -217,10 +237,10 @@ def _build_prompt(
 
 # 移動手段
 - {transport_mode_ja}
-
+{stores_info}
 # 指示
 1. 現在地からスタジアムまでの詳細な旅行プランを提案してください
-2. スタジアム周辺のおすすめスポット2〜3箇所を含めてください
+2. {"上記の店舗リストから2〜3箇所選んで、" if nearby_stores else "スタジアム周辺のおすすめスポット2〜3箇所を含めて"}プランに含めてください
 3. 各スポットの魅力や特徴を具体的に説明してください
 4. 試合前後の楽しみ方や、地域の雰囲気を伝えてください
 5. ギラヴァンツ北九州のサポーター向けの熱い応援メッセージを添えてください
