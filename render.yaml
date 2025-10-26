@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: wingarc-backend
+    runtime: docker
+    repo: https://github.com/kyiku/wingarc_hack_backend
+    branch: main
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GOOGLE_PLACES_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        value: https://qkduynbjhdyjfyzttmeq.supabase.co
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# 環境変数ファイル（本番環境では環境変数を使用）
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# テスト・開発
+.pytest_cache/
+.coverage
+htmlcov/
+
+# その他
+*.log
+.DS_Store
+README.md
