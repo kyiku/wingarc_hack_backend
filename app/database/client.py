@@ -9,7 +9,6 @@ Supabaseクライアントの設定と初期化
 
 import os
 from typing import Optional
-from fastapi import Request
 from supabase import create_client, Client
 
 # グローバルなシングルトンクライアント（RLS未適用の基本クライアント）
@@ -46,18 +45,13 @@ def get_supabase_client() -> Client:
     return _global_client
 
 
-def get_supabase(request: Optional[Request] = None) -> Client:
+def get_supabase() -> Client:
     """
     FastAPIの依存性注入用のSupabaseクライアント取得関数
 
     Returns:
         Client: Supabaseクライアント
     """
-    # ルーター／ミドルウェアで request.state.supabase がセットされていればそれを優先
-    if request is not None:
-        sb = getattr(request.state, "supabase", None)
-        if sb is not None:
-            return sb
     return get_supabase_client()
 
 

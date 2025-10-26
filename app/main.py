@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
+import re
 from contextlib import asynccontextmanager
 from app.api import users_router, stores_router, plans_router, matches_router, admin_router
 from app.scheduler import start_scheduler, shutdown_scheduler, run_scraper_now
@@ -18,11 +19,14 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリケーションのライフサイクル管理"""
-    # 起動時
-    start_scheduler()
+    # 起動時（Vercel環境ではスケジューラーを無効化）
+    is_vercel = os.getenv("VERCEL", "").lower() == "1"
+    if not is_vercel:
+        start_scheduler()
     yield
     # シャットダウン時
-    shutdown_scheduler()
+    if not is_vercel:
+        shutdown_scheduler()
 
 
 # FastAPIアプリケーションのインスタンス化
@@ -36,15 +40,10 @@ app = FastAPI(
 )
 
 # CORS設定
-origins = [
-    "http://localhost:3000",  # ローカル開発用フロントエンド
-    "http://localhost:8080",
-    # 本番環境のドメインは後で追加
-]
-
+# 開発環境とVercelドメインの両方を許可
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -85,6 +84,34 @@ async def root():
         "name": "ギラヴァンツ北九州ファンアプリ API",
         "version": "0.1.0",
         "docs": "/docs",
+    }
+
+
+@app.get("/admin/env-check", tags=["Admin"])
+async def check_environment():
+    """
+    環境変数の状態を確認する（デバッグ用）
+
+    Returns:
+        dict: 環境変数の状態
+    """
+    import googlemaps
+
+    api_key_raw = os.getenv("GOOGLE_PLACES_API_KEY", "")
+    api_key_stripped = api_key_raw.strip() if api_key_raw else ""
+
+    return {
+        "GOOGLE_PLACES_API_KEY_exists": bool(os.getenv("GOOGLE_PLACES_API_KEY")),
+        "GOOGLE_PLACES_API_KEY_prefix_raw": api_key_raw[:10] + "..." if api_key_raw else None,
+        "GOOGLE_PLACES_API_KEY_prefix_stripped": api_key_stripped[:10] + "..." if api_key_stripped else None,
+        "GOOGLE_PLACES_API_KEY_length_raw": len(api_key_raw),
+        "GOOGLE_PLACES_API_KEY_length_stripped": len(api_key_stripped),
+        "SUPABASE_URL_exists": bool(os.getenv("SUPABASE_URL")),
+        "SUPABASE_KEY_exists": bool(os.getenv("SUPABASE_KEY")),
+        "GEMINI_API_KEY_exists": bool(os.getenv("GEMINI_API_KEY")),
+        "googlemaps_module_available": googlemaps is not None,
+        "ENVIRONMENT": os.getenv("ENVIRONMENT", "not set"),
+        "VERCEL": os.getenv("VERCEL", "not set"),
     }
 
 

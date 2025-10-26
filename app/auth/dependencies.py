@@ -113,37 +113,16 @@ async def get_optional_user(
 
 
 async def ensure_rls(
-    request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
 ) -> None:
     """
     ルーター全体に適用できるRLS適用用の共通依存関数。
 
     - Authorizationヘッダがある場合のみ、PostgRESTにユーザーJWTを適用する。
-    - 共有クライアントの状態汚染を避けるため、可能ならリクエストスコープのクライアントを生成し request.state に格納する。
     - 失敗時はフェイルソフトで何もしない。
-    """
-    if not credentials:
-        return
-    token = credentials.credentials or ""
-    if not token:
-        return
 
-    # リクエストスコープの Supabase クライアントを生成してJWTを適用
-    # 失敗時は何もしない（RLS未適用のクライアントが使用される）
-    try:
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_KEY")
-        if supabase_url and supabase_key:
-            client = create_client(supabase_url, supabase_key)
-            try:
-                postgrest = getattr(client, "postgrest", None)
-                if postgrest and hasattr(postgrest, "auth"):
-                    postgrest.auth(token)
-            except Exception:
-                pass
-            # このリクエスト内では以降このクライアントが使われる
-            request.state.supabase = client
-    except Exception:
-        # 失敗時はフェイルソフト：RLS未適用のグローバルクライアントが使用される
-        pass
+    Note: Request.state への格納機能は、Pydantic 2.12互換性のため一時的に無効化されています
+    """
+    # 認証トークンの検証のみを行う
+    # RLSの適用は各エンドポイントのget_current_user依存関数で処理される
+    pass

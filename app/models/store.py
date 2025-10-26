@@ -6,12 +6,11 @@ These models shape the API responses for store endpoints.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from app.models.review import ReviewResponse
+from app.models.review import ReviewResponse
 
 
 class StoreSummary(BaseModel):
@@ -51,7 +50,11 @@ class StoreDetail(BaseModel):
     latitude: float = Field(description="緯度 (WGS84)")
     longitude: float = Field(description="経度 (WGS84)")
     opening_hours: Optional[List[str]] = Field(default=None, description="営業時間（文字列配列）")
-    reviews: List["ReviewResponse"] = Field(default_factory=list, description="口コミ一覧")
+    reviews: List[ReviewResponse] = Field(default_factory=list, description="口コミ一覧")
     recommendations: List[PlayerRecommendation] = Field(default_factory=list, description="選手のおすすめ一覧")
 
     model_config = {"from_attributes": True}
+
+
+# Rebuild model to resolve forward references
+StoreDetail.model_rebuild()

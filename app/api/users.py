@@ -4,10 +4,12 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 import logging
+from typing import List
 from supabase import Client
 from app.auth import get_current_user, ensure_rls
 from app.database import get_supabase
 from app.models.user import ProfileResponse, ProfileUpdate
+from app.models.review import ReviewResponse
 
 router = APIRouter(prefix="/users", tags=["Users"], dependencies=[Depends(ensure_rls)])
 
@@ -49,13 +51,28 @@ async def get_my_profile(
     # 2) フォールバック: profiles から取得し、email はAuth情報から合成
     response = supabase.table("profiles").select("*").eq("id", user_id).execute()
 
+    # プロフィールが存在しない場合は自動作成
     if not response.data or len(response.data) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="プロフィールが見つかりません",
-        )
+        logger.info(f"プロフィールが存在しないため、ユーザーID {user_id} の新規プロフィールを作成します")
+        # user_metadataからnicknameを取得
+        nickname = str(current_user.get("user_metadata", {}).get("nickname", ""))
 
-    profile = response.data[0]
+        # 新規プロフィールを作成
+        insert_response = supabase.table("profiles").insert({
+            "id": user_id,
+            "nickname": nickname
+        }).execute()
+
+        if not insert_response.data or len(insert_response.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="プロフィールの作成に失敗しました",
+            )
+
+        profile = insert_response.data[0]
+    else:
+        profile = response.data[0]
+
     email = str(current_user.get("email") or "")
     return ProfileResponse(id=profile["id"], nickname=profile["nickname"], email=email)
 
@@ -114,3 +131,54 @@ async def update_my_profile(
     updated_profile = response.data[0]
     email = str(current_user.get("email") or "")
     return ProfileResponse(id=updated_profile["id"], nickname=updated_profile["nickname"], email=email)
+
+
+@router.get("/me/reviews", response_model=List[ReviewResponse])
+async def get_my_reviews(
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    現在ログイン中のユーザーが投稿した口コミを取得
+
+    認証が必要なエンドポイントです。
+
+    Returns:
+        List[ReviewResponse]: ユーザーが投稿した口コミのリスト
+    """
+    user_id = current_user["id"]
+
+    try:
+        # reviewsテーブルから、ユーザーが投稿した口コミを取得
+        # profilesテーブルと結合してニックネームも取得
+        response = (
+            supabase.table("reviews")
+            .select("*, profiles(nickname)")
+            .eq("user_id", user_id)
+            .order("created_at", {"ascending": False})
+            .execute()
+        )
+
+        reviews = []
+        for row in response.data:
+            # profilesがネストされているので展開
+            nickname = row.get("profiles", {}).get("nickname", "") if row.get("profiles") else ""
+
+            reviews.append(ReviewResponse(
+                id=row["id"],
+                store_id=row["store_id"],
+                user_id=row["user_id"],
+                username=nickname,
+                rating=row["rating"],
+                comment=row["comment"],
+                created_at=row["created_at"],
+            ))
+
+        return reviews
+
+    except Exception as e:
+        logger.exception("ユーザーの口コミ取得中にエラーが発生しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="口コミの取得に失敗しました",
+        )

@@ -8,11 +8,11 @@ Pydanticで検証して、`List[str]` に正規化するヘルパー。
 from __future__ import annotations
 
 from typing import Any, List, Optional
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, RootModel, ValidationError
 
 
-class OpeningHoursList(BaseModel):
-    __root__: List[str]
+class OpeningHoursList(RootModel):
+    root: List[str]
 
 
 class OpeningHoursDict(BaseModel):
@@ -24,8 +24,8 @@ class OpeningHoursEntry(BaseModel):
     text: Optional[str] = None
 
 
-class OpeningHoursEntryList(BaseModel):
-    __root__: List[OpeningHoursEntry]
+class OpeningHoursEntryList(RootModel):
+    root: List[OpeningHoursEntry]
 
 
 def normalize_opening_hours(raw: Any) -> Optional[List[str]]:
@@ -41,7 +41,7 @@ def normalize_opening_hours(raw: Any) -> Optional[List[str]]:
         return None
     # パターン1: 文字列配列
     try:
-        return OpeningHoursList.model_validate(raw).__root__
+        return OpeningHoursList.model_validate(raw).root
     except ValidationError:
         pass
 
@@ -53,7 +53,7 @@ def normalize_opening_hours(raw: Any) -> Optional[List[str]]:
 
     # パターン3: オブジェクト配列から代表テキストを抽出
     try:
-        entries = OpeningHoursEntryList.model_validate(raw).__root__
+        entries = OpeningHoursEntryList.model_validate(raw).root
         result: List[str] = []
         for e in entries:
             s = e.weekday_text or e.text

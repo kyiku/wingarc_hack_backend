@@ -136,6 +136,7 @@ def get_dynamic_chain_keywords() -> List[str]:
     - 取得失敗時は前回成功時の値を返す。初回かつ失敗なら空配列。
     - デフォルトTTLは300秒。環境変数で調整可能。
     """
+    global _CACHED_AT
     now = time.monotonic()
     # まずはロックなしで期限切れ判定（高速経路）
     if _CACHED_NAMES and (now - _CACHED_AT) < _ttl_seconds():
@@ -161,7 +162,6 @@ def get_dynamic_chain_keywords() -> List[str]:
             # 正常取得: キャッシュ更新
             _CACHED_NAMES.clear()
             _CACHED_NAMES.extend(names)
-            global _CACHED_AT
             _CACHED_AT = now
             return list(_CACHED_NAMES)
         except (httpx.TimeoutException, httpx.HTTPError, APIError):
@@ -181,11 +181,11 @@ def invalidate_dynamic_chain_keywords_cache() -> None:
 
 def refresh_dynamic_chain_keywords() -> List[str]:
     """キャッシュを無視してDBから再取得し、最新値でキャッシュを更新して返す。"""
+    global _CACHED_AT
     with _CACHE_LOCK:
         client = get_client()
         if client is None:
             _CACHED_NAMES.clear()
-            global _CACHED_AT
             _CACHED_AT = 0.0
             return []
         try:
@@ -198,7 +198,6 @@ def refresh_dynamic_chain_keywords() -> List[str]:
                     names.append(n.strip())
             _CACHED_NAMES.clear()
             _CACHED_NAMES.extend(names)
-            global _CACHED_AT
             _CACHED_AT = time.monotonic()
             return list(_CACHED_NAMES)
         except (httpx.TimeoutException, httpx.HTTPError, APIError):

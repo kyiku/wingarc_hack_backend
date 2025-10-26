@@ -101,6 +101,80 @@ def generate_travel_plan(
         raise Exception("旅行プランの生成中にエラーが発生しました")
 
 
+def generate_travel_plan_stream(
+    match_info: Dict[str, Any],
+    current_latitude: float,
+    current_longitude: float,
+    transport_mode: str,
+):
+    """
+    Gemini APIを使用してストリーミング形式で旅行プランを生成する
+
+    Args:
+        match_info: 試合情報（opponent, venue_name, venue_latitude, venue_longitudeなど）
+        current_latitude: 現在地の緯度
+        current_longitude: 現在地の経度
+        transport_mode: 移動手段（drive, walking, transit, bicycling）
+
+    Yields:
+        str: ストリーミングで返される部分的なJSON文字列
+
+    Raises:
+        ValueError: Gemini API keyが設定されていない場合
+        Exception: Gemini API呼び出しエラー
+    """
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not configured")
+
+    # プロンプトの構築
+    prompt = _build_prompt(
+        match_info=match_info,
+        current_latitude=current_latitude,
+        current_longitude=current_longitude,
+        transport_mode=transport_mode,
+    )
+
+    try:
+        # Gemini モデルを使用（環境変数で設定可能）
+        model = genai.GenerativeModel(GEMINI_MODEL)
+
+        # JSON形式でのレスポンスを要求
+        generation_config = GenerationConfig(
+            temperature=0.7,  # 創造性を少し持たせる
+            response_mime_type="application/json",
+        )
+
+        logger.info(f"Gemini API ストリーミング呼び出し中: 試合={match_info.get('opponent')}")
+
+        # ストリーミングでコンテンツを生成
+        response_stream = model.generate_content(
+            prompt,
+            generation_config=generation_config,
+            stream=True,  # ストリーミングを有効化
+        )
+
+        # ストリーミングで返ってきたテキストを順次yield
+        full_text = ""
+        for chunk in response_stream:
+            if chunk.text:
+                full_text += chunk.text
+                # 部分的なテキストをyield
+                yield chunk.text
+
+        logger.info("Gemini API ストリーミング生成が完了しました")
+
+        # 最終的な完全なJSONをパース可能か確認（ログ用）
+        try:
+            json.loads(full_text)
+            logger.info("生成されたJSONは有効です")
+        except json.JSONDecodeError:
+            logger.warning(f"生成されたJSONが不正: {full_text[:200]}...")
+
+    except Exception as e:
+        logger.error(f"Gemini API ストリーミング呼び出しエラー: {e}", exc_info=True)
+        raise Exception("旅行プランのストリーミング生成中にエラーが発生しました")
+
+
 def _build_prompt(
     match_info: Dict[str, Any],
     current_latitude: float,

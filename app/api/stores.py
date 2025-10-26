@@ -145,9 +145,9 @@ def get_nearby_stores(
         raise HTTPException(status_code=500, detail="近隣店舗の検索に失敗しました")
 
 
-@router.get("/{store_id}", response_model=StoreDetail)
+@router.get("/{store_identifier}", response_model=StoreDetail)
 async def get_store_detail(
-    store_id: UUID,
+    store_identifier: str,
     supabase: Client = Depends(get_supabase),
 ):
     """特定店舗の詳細情報を返す。
@@ -157,17 +157,37 @@ async def get_store_detail(
         - reviews: 口コミ一覧（ユーザー名は profiles.nickname より解決）
         - player_recommendations: 選手のおすすめ一覧
 
+    Args:
+        store_identifier: 店舗ID（UUID）または Google Place ID
+
     認証は不要。
     """
 
     # 1) 店舗の基本情報
     try:
+        # まず、google_place_id として検索
         store_resp = (
-            supabase.table("stores").select("*").eq("id", str(store_id)).single().execute()
+            supabase.table("stores").select("*").eq("google_place_id", store_identifier).execute()
         )
-        if not store_resp.data:
-            raise HTTPException(status_code=404, detail="指定された店舗が見つかりません")
-        store = store_resp.data
+
+        if store_resp.data and len(store_resp.data) > 0:
+            # Google Place IDで見つかった
+            store = store_resp.data[0]
+            logger.info(f"店舗詳細取得: google_place_id={store_identifier}, id={store['id']}")
+        else:
+            # UUIDとして検索（後方互換性）
+            try:
+                uuid_obj = UUID(store_identifier)
+                store_resp = (
+                    supabase.table("stores").select("*").eq("id", str(uuid_obj)).single().execute()
+                )
+                if not store_resp.data:
+                    raise HTTPException(status_code=404, detail="指定された店舗が見つかりません")
+                store = store_resp.data
+                logger.info(f"店舗詳細取得: id={store_identifier}")
+            except ValueError:
+                # UUIDでもGoogle Place IDでもない、または見つからない
+                raise HTTPException(status_code=404, detail="指定された店舗が見つかりません")
     except HTTPException:
         raise
     except Exception:
@@ -181,7 +201,7 @@ async def get_store_detail(
     # 2) レビュー一覧の取得（サービス層に委譲）
     try:
         reviews: List[ReviewResponse] = list_reviews_with_usernames(
-            supabase=supabase, store_id=str(store_id), limit=50
+            supabase=supabase, store_id=str(store["id"]), limit=50
         )
     except Exception:
         logger.exception("レビュー一覧の取得に失敗しました")
@@ -193,7 +213,7 @@ async def get_store_detail(
         rec_resp = (
             supabase.table("player_recommendations")
             .select("id, player_name, comment, created_at")
-            .eq("store_id", str(store_id))
+            .eq("store_id", str(store["id"]))
             .order("created_at", desc=True)
             .execute()
         )
@@ -221,9 +241,9 @@ async def get_store_detail(
     )
 
 
-@router.post("/{store_id}/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{store_identifier}/reviews", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED)
 async def create_review(
-    store_id: UUID,
+    store_identifier: str,
     review: ReviewCreate,
     current_user: dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase),
@@ -233,9 +253,11 @@ async def create_review(
 
     認証が必要なエンドポイントです。
 
+    店舗がDBに存在しない場合、リクエストボディの店舗情報（store_name等）を使って自動的に登録します。
+
     Args:
-        store_id: 店舗ID
-        review: レビュー情報（rating, comment）
+        store_identifier: 店舗ID（UUID）または Google Place ID
+        review: レビュー情報（rating, comment, 店舗情報）
         current_user: 認証済みユーザー情報
         supabase: Supabaseクライアント
 
@@ -243,23 +265,65 @@ async def create_review(
         ReviewResponse: 投稿されたレビュー情報
 
     Raises:
-        HTTPException: 店舗が見つからない場合（404）、データベースエラー（500）
+        HTTPException: 必要な店舗情報が不足している場合（400）、データベースエラー（500）
     """
     user_id = current_user["id"]
     # RLS適用はルーター依存関数 ensure_rls で共通化
 
-    # 店舗の存在確認
+    # 店舗の取得または作成
+    store_uuid: Optional[str] = None
     try:
-        store_response = supabase.table("stores").select("id").eq("id", str(store_id)).execute()
-        if not store_response.data or len(store_response.data) == 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="指定された店舗が見つかりません",
-            )
+        # まず、google_place_id として検索
+        store_response = supabase.table("stores").select("id").eq("google_place_id", store_identifier).execute()
+
+        if store_response.data and len(store_response.data) > 0:
+            # 既存の店舗が見つかった
+            store_uuid = store_response.data[0]["id"]
+            logger.info(f"既存店舗を使用: google_place_id={store_identifier}, id={store_uuid}")
+        else:
+            # UUIDとして検索（後方互換性）
+            try:
+                uuid_obj = UUID(store_identifier)
+                store_response = supabase.table("stores").select("id").eq("id", str(uuid_obj)).execute()
+                if store_response.data and len(store_response.data) > 0:
+                    store_uuid = store_response.data[0]["id"]
+                    logger.info(f"既存店舗を使用: id={store_uuid}")
+            except ValueError:
+                # UUIDではない = google_place_id
+                pass
+
+            # 店舗が見つからない場合、新規作成
+            if not store_uuid:
+                if not all([review.store_name, review.store_google_place_id,
+                           review.store_latitude is not None, review.store_longitude is not None]):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="店舗が見つかりません。新規登録には store_name, store_google_place_id, store_latitude, store_longitude が必要です",
+                    )
+
+                # 新しい店舗を作成
+                new_store_data = {
+                    "google_place_id": review.store_google_place_id,
+                    "name": review.store_name,
+                    "latitude": review.store_latitude,
+                    "longitude": review.store_longitude,
+                    "address": "",  # 住所は空文字列（後で更新可能）
+                }
+
+                create_response = supabase.table("stores").insert(new_store_data).execute()
+                if not create_response.data or len(create_response.data) == 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="店舗の作成に失敗しました",
+                    )
+
+                store_uuid = create_response.data[0]["id"]
+                logger.info(f"新規店舗を作成: google_place_id={review.store_google_place_id}, id={store_uuid}, name={review.store_name}")
+
     except HTTPException:
         raise
     except Exception:
-        logger.exception("店舗の存在確認中にエラーが発生しました")
+        logger.exception("店舗の確認/作成中にエラーが発生しました")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="店舗の確認中にエラーが発生しました",
@@ -268,7 +332,7 @@ async def create_review(
     # レビューをデータベースに保存
     try:
         review_data = {
-            "store_id": str(store_id),
+            "store_id": str(store_uuid),
             "user_id": user_id,
             "rating": review.rating,
             "comment": review.comment,
@@ -326,4 +390,100 @@ async def create_review(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="レビューの投稿に失敗しました",
+        )
+
+
+@router.get("/recommended", response_model=List[StoreDetail])
+async def get_recommended_stores(
+    limit: int = Query(10, description="取得する店舗数", ge=1, le=50),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    選手のおすすめがある店舗の一覧を取得する
+
+    認証は不要。
+
+    Args:
+        limit: 取得する店舗数（デフォルト10）
+        supabase: Supabaseクライアント
+
+    Returns:
+        List[StoreDetail]: 選手のおすすめがある店舗の一覧
+    """
+    try:
+        # player_recommendationsから店舗IDを取得
+        rec_response = (
+            supabase.table("player_recommendations")
+            .select("store_id, player_name, comment, id, created_at")
+            .order("created_at", desc=True)
+            .limit(limit * 2)  # 重複を考慮して多めに取得
+            .execute()
+        )
+
+        if not rec_response.data or len(rec_response.data) == 0:
+            return []
+
+        # 店舗IDのリストを取得（重複排除）
+        store_ids = list(set([rec["store_id"] for rec in rec_response.data]))[:limit]
+
+        # 店舗情報を取得
+        stores_response = (
+            supabase.table("stores")
+            .select("*")
+            .in_("id", store_ids)
+            .execute()
+        )
+
+        if not stores_response.data:
+            return []
+
+        # 店舗ごとにおすすめとレビューを集約
+        result: List[StoreDetail] = []
+        for store in stores_response.data:
+            store_id = str(store["id"])
+
+            # この店舗のおすすめを取得
+            recommendations: List[PlayerRecommendation] = []
+            for rec in rec_response.data:
+                if str(rec["store_id"]) == store_id:
+                    try:
+                        recommendations.append(PlayerRecommendation.model_validate(rec))
+                    except Exception:
+                        continue
+
+            # レビューを取得
+            try:
+                reviews = list_reviews_with_usernames(
+                    supabase=supabase, store_id=store_id, limit=5
+                )
+            except Exception:
+                logger.exception(f"店舗 {store_id} のレビュー取得に失敗")
+                reviews = []
+
+            # 開店時間の解析
+            opening_hours_raw: Optional[object] = store.get("opening_hours")
+            opening_hours: Optional[List[str]] = parse_opening_hours(opening_hours_raw)
+
+            # StoreDetailを作成
+            result.append(
+                StoreDetail(
+                    id=store_id,
+                    google_place_id=str(store.get("google_place_id")),
+                    name=str(store.get("name")),
+                    address=str(store.get("address") or ""),
+                    latitude=float(store.get("latitude")),
+                    longitude=float(store.get("longitude")),
+                    opening_hours=opening_hours,
+                    reviews=reviews,
+                    recommendations=recommendations,
+                )
+            )
+
+        return result
+
+    except Exception:
+        logger.exception("おすすめ店舗の取得に失敗しました")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="おすすめ店舗の取得に失敗しました",
         )

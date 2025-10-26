@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 def _to_store_summary(place: dict) -> Optional[StoreSummary]:
     """Convert a Google Places ``place`` dict to ``StoreSummary``.
 
-    Returns ``None`` if essential fields are missing.
+    Returns ``None`` if essential fields are missing or if it's a hotel/lodging.
     """
 
     try:
@@ -48,6 +48,13 @@ def _to_store_summary(place: dict) -> Optional[StoreSummary]:
 
     if not place_id or not name:
         return None
+
+    # ホテルや宿泊施設を除外
+    types = place.get("types", [])
+    if isinstance(types, list):
+        lodging_types = {"lodging", "hotel", "motel", "hostel", "guest_house"}
+        if any(t in lodging_types for t in types):
+            return None
 
     return StoreSummary(
         id=None,
@@ -111,20 +118,61 @@ def search_nearby_local_stores(
     """
 
     api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+    # 環境変数の値から不要な空白・改行を削除
+    if api_key:
+        api_key = api_key.strip()
+
+    # デバッグログ追加
+    logger.info(f"Google Places API検索: lat={latitude}, lng={longitude}")
+    logger.info(f"API Key exists: {bool(api_key)}")
+    logger.info(f"googlemaps module available: {googlemaps is not None}")
+
+    if api_key:
+        # APIキーの最初の数文字だけをログに出力（セキュリティのため）
+        logger.info(f"API Key prefix: {api_key[:10]}...")
 
     # If googlemaps is not available or API key missing, return stub results.
-    if not api_key or googlemaps is None:
+    if not api_key:
+        logger.warning("GOOGLE_PLACES_API_KEY not found - returning stub data")
+        return _stub_results(latitude, longitude)[:max_results]
+
+    if googlemaps is None:
+        logger.warning("googlemaps module not available - returning stub data")
         return _stub_results(latitude, longitude)[:max_results]
 
     try:
+        logger.info("Creating googlemaps client...")
         client = googlemaps.Client(key=api_key)
-        # Use a broad category; later we can refine keywords/types.
-        resp = client.places_nearby(
-            location=(latitude, longitude),
-            radius=radius_m,
-            type="restaurant",
-        )
-        results: Iterable[dict] = resp.get("results", [])
+        logger.info("googlemaps client created successfully")
+
+        # 複数のタイプで検索してマージ（より多くの飲食店を取得）
+        search_types = ["restaurant", "cafe", "bar", "bakery"]
+        all_results: List[dict] = []
+        seen_place_ids: set = set()
+
+        for place_type in search_types:
+            try:
+                logger.info(f"Searching for type: {place_type}")
+                resp = client.places_nearby(
+                    location=(latitude, longitude),
+                    radius=radius_m,
+                    type=place_type,
+                )
+                results_count = len(resp.get("results", []))
+                logger.info(f"Found {results_count} results for {place_type}")
+
+                for place in resp.get("results", []):
+                    place_id = place.get("place_id")
+                    if place_id and place_id not in seen_place_ids:
+                        seen_place_ids.add(place_id)
+                        all_results.append(place)
+            except Exception as e:
+                logger.warning(f"タイプ {place_type} の検索中にエラー: {e}")
+                continue
+
+        logger.info(f"Total unique places found: {len(all_results)}")
+
+        results: Iterable[dict] = all_results
 
         # Filter out chain brands. Prefer DB-provided chain list when available.
         extra = []

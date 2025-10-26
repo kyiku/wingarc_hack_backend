@@ -65,6 +65,7 @@ class PlanCreate(BaseModel):
     match_id: UUID = Field(..., description="試合ID")
     title: str = Field(..., min_length=1, max_length=200, description="プランのタイトル")
     plan_details: str = Field(..., description="プランの詳細")
+    route_data: Optional[Dict[str, Any]] = Field(None, description="ルート情報（JSON形式）")
 
 
 class PlanListResponse(BaseModel):
@@ -84,6 +85,7 @@ class PlanResponse(BaseModel):
     match_id: UUID
     title: str
     plan_details: str
+    route_data: Optional[Dict[str, Any]] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
